@@ -502,7 +502,12 @@ setOpts ()
 encodeIt ()
 {
   inFile="${fullName[$l]}"
-  mkdir -p "${outDir[$l]}"
+
+  if [[ ! -d "${outDir[$l]}" ]]; then
+    mkdir -p "${outDir[$l]}"
+    chown rp01:admins "${outDir[$l]}"
+    chmod 775 "${outDir[$l]}"
+  fi
   if [[ $Q != 'HQ' ]]; then 
     outFile="${outDir[$l]}/${baseName[$l]}.mp4"
     echo -e "         ${C3}Output:${C6} ...${baseDir[$l]}/${baseName[$l]}.mp4${C0}\n"
@@ -511,9 +516,9 @@ encodeIt ()
     echo -e "         ${C3}Output:${C6} ...${baseDir[$l]}/${baseName[$l]}-∞.mp4${C0}\n"
   fi
 
-  tempOut="$tempDir/temp.mp4"
+  tempOut="$tempDir/converting.mp4"
 
-  traceIt $LINENO encdeIt " CMD  " "> ffmpeg -y -i \"$inFile\" -i \"$metaFile\" -map_metadata 1 $encodeOpts $streamMap \"$outFile\""
+  traceIt $LINENO encdeIt " CMD  " "> ffmpeg -hide_banner -y -loglevel quiet -stats -i \"$inFile\" -i \"$metaFile\" -map_metadata 1 $complexOpts $encodeOpts $streamMap \"$outFile\""
 
   echo -e "                                     total time=${C4}$duration${C0}"
   # shellcheck disable=SC2086,SC2090
@@ -563,10 +568,9 @@ encodeIt ()
     } >> "$traceLog" 2>&1
 
     logIt "outFile = $outFile"
-    # Setting permission on share directory.
-    chmod 0775 "${outDir[$l]}"
+    # Setting permission on outFile.
+    chown rp01:admins "$outFile"
     chmod 0664 "$outFile"
-    chgrp -R admins "${outDir[$l]}"
   fi
 
   return $STATUS
@@ -739,6 +743,11 @@ done
 # Video Defaults unless overridden
 # targetVBR=3
 # vExtra='profile:v high -level 3.2'
+
+if [[ $UID -gt 0 ]]; then
+  echo -e "Must run as root user for file permissions."
+  exit 2
+fi
 
 traceIt $LINENO " MAIN  " " info " "*** START OF NEW RUN ***"
 echo -e "${C3}\nStarting run of ${C6}Video Converter${C0}"
