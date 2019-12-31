@@ -3,101 +3,40 @@
 
 # NOTE: Work-in-progress, still dinking with this....
 
+# DESCRIPTION:  This script utilized ffmpeg to re-encode videos to the following:
+#               Convert video to H.264, resize to minimum of 720 hSize and max of 1280 hSize,
+#               with a target CRF of 20 and buffer size of 1500.  This means that the video
+#               should play on all DLNA servers and TVs.
+#               Convert audio to AAC, bitRate of 128Kbs.
+#               If English subtitles are detected, it will also map those into output.
 
-typeset streamMap baseName outFile encodeOpts videoOpts codecOpts audioOpts vFrameRate fullName \
-	fileName directory extension 
-typeset -i i=0 j=0 l=0 noAudio=0
-
-key=$1
-
-case $key in 
-  -t | --tv) #re-encode TV Shows
-    inDir="/mnt/usenet/extract/TV Shows"
-    outDir="/nas/multimedia"
-    workDir='/mnt/usenet/Encode'
-    vPreset=medium
-    vTune=film
-    targetCRF=20
-    maxBitrate=30000
-    bufSize=1500
-    shift
-    ;;
-  -m | --movie) #re-encode movies
-    inDir='/mnt/usenet/extract/movies'
-    outDir='/nas/multimedia'
-    workDir='/mnt/usenet/Encode'
-    vPreset=medium
-    vTune=film
-    targetCRF=20
-    maxBitrate=30000
-    bufSize=1500
-    shift
-    ;;
-  --feat) #re-encode movies
-    inDir='/mnt/usenet/extract/Features'
-    outDir='/nas/multimedia/After Dark'
-    workDir='/mnt/usenet/Encode'
-    vPreset=medium
-    vTune=film
-    targetCRF=20
-    maxBitrate=30000
-    bufSize=1500
-    shift
-    ;;
-  --soft) #re-encode TV Shows
-    inDir="/mnt/usenet/extract/Softcore"
-    outDir="/nas/multimedia/After Dark"
-    workDir='/mnt/usenet/Encode'
-    vPreset=medium
-    vTune=film
-    targetCRF=20
-    maxBitrate=30000
-    bufSize=1500
-    shift
-    ;;
-  --hard) #re-encode movies
-    inDir='/mnt/usenet/extract/Hardcore'
-    outDir='/nas/multimedia/After Dark'
-    workDir='/mnt/usenet/Encode'
-    vPreset=medium
-    vTune=film
-    targetCRF=20
-    maxBitrate=30000
-    bufSize=1500
-    shift
-    ;;
-  -s) # smut
-    inDir='/mnt/usenet/extract/smut'
-    outDir='/video/smut'
-    workDir='/video/temp'
-    vPreset=medium
-    vTune=film
-    targetCRF=20
-    maxBitrate=30000
-    bufSize=1500
-    shift
-    ;;
-  *) # Unknown
-    echo "USAGE: $0 [ -t | -m | -s | --feat | --soft | --hard ]"
-    exit 1
-    ;;
-esac
+typeset streamMap baseName outFile encodeOpts videoOpts audioOpts vFrameRate fullName \
+	fileName extension 
+typeset -i i=0 j=0 l=0 Q=1
 
 # Directory settings
-doneDir='/mnt/usenet/done'
-logFile="/$workDir/encode.log"
-traceLog="$workDir/$(date +%Y%m%d)_trace.log"
-inFiles="$workDir/inFiles"
+baseDir='/data/usenet'
+logDir='/var/log/convert'
+searchDir="$baseDir/renamed"
+workDir="$baseDir/tmp"
+logFile="$logDir/ccvc.log"
+traceLog="$logDir/ccvc_trace_$(date +%F).log"
+doneDir="$baseDir/done"
+videoDir="/video"
 
-# Video settings
-# HQ=0
-range="-ss 04:00 -t 02:00"
+inFiles="$workDir/inFiles.lst"
+tempDir="/video/temp"
+
+# Audio sample range
+#range="-ss 01:00 -t 06:00"
+range="-t 10:00"
 
 # Misc settings
 pad=$(printf '%0.1s' "."{1..100})
 padlength=100
 interval=.5
 rPID=""
+trap 'deadJim' 1 2 3 15
 
 # Add some colors
 C1='\033[38;5;040m'  # Green
@@ -107,6 +46,7 @@ C4='\033[38;5;184m'  # Yellow
 C5='\033[38;5;160m'  # Red
 C6='\033[38;5;165m'  # Purple
 C7='\033[38;5;063m'  # Blue
+#C8='\033[38;5;234m'  # Dark
 C0='\033[0;00m'      # Reset
 
 
@@ -151,6 +91,7 @@ rotate ()
   do
     tput civis
     ((z++))
+    #shellcheck disable=SC1003
     case $z in
       "1") echo -e "-\b\c"
         sleep $interval
@@ -171,9 +112,7 @@ rotate ()
 
 killWait ()
 {
-
   FLAG=$1
-
   kill -9 "$rPID"
   wait "$rPID" 2>/dev/null
   echo -e "\b\b\c"
@@ -192,28 +131,52 @@ killWait ()
   return 0
 }
 
+deadJim ()
+{
+  # Display message and reset cursor on trap
+  kill -9 "$rPID" > /dev/null 2>&1
+  wait "$rPID" 2>/dev/null
+  echo ""
+  Text1="Abort detected, stopping now"
+  # shellcheck disable=SC2059
+  printf "  ${C5}${Text1}${C0}"
+  printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
+  echo -e "\b\b\c"
+  echo -e "[${C6}KILLED${C0}]"
+  tput cnorm
+  exit 1
+}
 
 getFiles ()
 {
-  find "$inDir" \
-    -iregex '.*.\(mgp\|mp4\|wmv\|avi\|mpg\|mov\|mkv\|flv\|webm\)' \
+  ## Find following file types within inDir.
+  ## Filter any with .zzz extension.
+  find "$inDir" -iregex '.*.\(mgp\|mp4\|m4v\|wmv\|avi\|mpg\|mov\|mkv\|flv\|webm\|ts\|f4v\)' \
     -fprintf "$inFiles" '%h/%f\n'
+  sed -i '/\.zzz/d' "$inFiles"
 
+  # The following if statements detect where the file is located and sets fType.
   i=0
-  while read LINE; do
+  while read -r LINE; do
     fileNo=$((i+1))
     fullName[$i]="$LINE"
     fileName[$i]=$(basename "${fullName[$i]}")
-    directory[$i]=$(dirname "${fullName[$i]}" | sed -e "s/\/mnt\/usenet\/extract//")
+    #inDir[$i]=$(dirname "${fullName[$i]}")
+    # Strip search directory from base directory.
+    baseDir[$i]=$(dirname "${fullName[$i]}" | sed -e "s@$searchDir/@@")
     tempFile="${fileName[$i]}"
     extension[$i]="${tempFile##*.}"
     baseName[$i]="${tempFile%.*}"
+    #outDir[$i]="/nfs/video/${baseDir[$i]}"
+    outDir[$i]="$videoDir/${baseDir[$i]}"
+
     traceIt $LINENO getFles " info " "== Processing file number: [$(printf '%.3d' $fileNo)] =="
-    traceIt $LINENO getFles " info " "fullName=${fullName[$i]}"
-    traceIt $LINENO getFles " info " "directory=${directory[$i]}"
-    traceIt $LINENO getFles " info " "fileName=${fileName[$i]}"
-    traceIt $LINENO getFles " info " "baseName=${baseName[$i]}"
-    traceIt $LINENO getFles " info " "extension=${extension[$i]}"
+    traceIt $LINENO getFles " info " " fullName: ${fullName[$i]}"
+    traceIt $LINENO getFles " info " "directory: ${baseDir[$i]}"
+    traceIt $LINENO getFles " info " " fileName: ${fileName[$i]}"
+    traceIt $LINENO getFles " info " " baseName: ${baseName[$i]}"
+    traceIt $LINENO getFles " info " "extension: ${extension[$i]}"
+    traceIt $LINENO getFles " info " "   outDir: ${outDir[$i]}"
     ((i++))
   done < $inFiles
   rm $inFiles
@@ -222,261 +185,573 @@ getFiles ()
 
 probeIt ()
 {
+  #set -x
   # Gather video information
-  inFile=$1
+  inFile="${fullName[$l]}"
   traceIt $LINENO probeIt " info " "inFile=\"$inFile\""
 
   probeFile="$workDir/${baseName[$l]}.probe"
   dataFile="$workDir/${baseName[$l]}.data"
-  echo -e "input: $inFile\n" > "$probeFile"
-  echo -e "input: $inFile\n" > "$dataFile"
-  ffprobe -hide_banner \
-    -show_entries streams \
-    -sexagesimal \
-    -of flat "$inFile" > "$probeFile" 2>&1
+  # In case of multiple runs.
+  rm -f "$probeFile" "$dataFile" >/dev/null 2>&1
+  ffprobe -show_entries streams -sexagesimal -of flat "$inFile" > "$probeFile" 2>&1
   sed -i 's/\"//g' "$probeFile"
+  # To handle bitmap subs vs. text subtitles
+  sed -i '/^programs\./d' "$probeFile"
 
   # Collect number of streams and type
-  stream=( $(grep 'codec_type' "$probeFile") )
-  
-  duration=$(ffprobe "$inFile" 2>&1 | grep 'Duration' | awk -F',' '{print $1}' | awk '{print $2}')
+  ## BAD_CODE ## stream=( $(grep '^streams\.' "$probeFile" | grep 'codec_type') )
+  mapfile -t stream < <(grep -E '^streams\..*codec_type' "$probeFile")
+  traceIt $LINENO probeIt " info " "stream=${stream[*]}"
 
-  j=0; unset sample audioMap 
+  duration=$(grep 'Duration' "$probeFile" | awk -F',' '{print $1}' | awk '{print $2}')
+  traceIt $LINENO probeIt " info " "duration=$duration"
+
+  j=0; unset sample subMap vStream aStream sStream
   while (( j < ${#stream[*]} )); do
-    # TODO Change to case select
-    # set -x
-    if [[ $(grep -c 'video' <<< ${stream[$j]}) -eq 1 ]]; then
-      videoMap="0:${j}"
+    # Assuming only 1 video stream.
+    if grep -q 'video' <<< "${stream[$j]}" && [[ -z $vStream ]]; then
+      vStream="0:${j}"
+      traceIt $LINENO probeIt " info " "videoMap=0:$j"
       hSize=$(grep "\.${j}\.width" "$probeFile" | awk -F'=' '{print $2}')
-      vSize=$(grep "\.${j}\.height" "$probeFile" | awk -F'=' '{print $2}')
-      videoSize="${hSize}x${vSize}"
-      traceIt $LINENO probeIt " info " "videoMap=$videoMap"
       traceIt $LINENO probeIt " info " "hSize=$hSize"
+      vSize=$(grep "\.${j}\.height" "$probeFile" | awk -F'=' '{print $2}')
       traceIt $LINENO probeIt " info " "vSize=$vSize"
+      videoSize="${hSize}x${vSize}"
       traceIt $LINENO probeIt " info " "videoSize=$videoSize"
-      vBitRate=$(grep "\.${j}\.bit_rate=" "$probeFile" | awk -F'=' '{print $2}')
-      if [[ $vBitRate == "N/A" ]]; then
-        vBitRate=$(grep 'bitrate' "$probeFile" | awk -F: '{print $6}' | cut -c 2- | awk '{print $1}')
-      else
-        vBitRate=$(( vBitRate/1024 ))
-      fi
-      vFrameRate=$(grep "\.${j}\.r_frame_rate=" "$probeFile" | awk -F'=' '{print $2}')
-      # duration=$(grep "\.${j}\.duration=" "$probeFile" | awk -F'=' '{print $2}')
-      vLanguage=$(grep "\.${j}\.language=" "$probeFile" | awk -F'=' '{print $2}')
+      vBitRate=$(grep 'bitrate' "$probeFile" | awk -F: '{print $6}' | cut -c 2- | awk '{print $1}')
       traceIt $LINENO probeIt " info " "vBitRate=$vBitRate"
+      vFrameRate=$(grep "stream\.${j}\.r_frame_rate=" "$probeFile" | awk -F'=' '{print $2}')
       traceIt $LINENO probeIt " info " "vFrameRate=$vFrameRate"
-      traceIt $LINENO probeIt " info " "duration=$duration"
+      vLanguage=$(grep "stream\.${j}\..*language=" "$probeFile" | awk -F'=' '{print $2}')
       traceIt $LINENO probeIt " info " "vLanguage=$vLanguage"
     # Assumed first audio stream is good
-    elif [[ $(grep -c 'audio' <<< ${stream[$j]}) -eq 1 && -z $sample ]]; then
-      audioMap="0:${j}"
-      sample=$(grep "\.${j}\.sample_rate=" "$probeFile" | awk -F'=' '{print $2}')
-      aBitRate=$(grep "\.${j}\.bit_rate=" "$probeFile" | awk -F'=' '{print $2}')
-      aLanguage=$(grep "\.${j}\.language=" "$probeFile" | awk -F'=' '{print $2}')
-      traceIt $LINENO probeIt " info " "audioMap=$audioMap"
+    elif grep -q 'audio' <<< "${stream[$j]}" && [[ -z $aStream ]]; then
+      aStream="0:${j}"  ## Set to current audio stream.
+      altStream="0:${j}" ## Set to last audio stream detected.
+      sample=$(grep "stream\.${j}\.sample_rate=" "$probeFile" | awk -F'=' '{print $2}')
+      aBitRate=$(grep -m 1 "stream\.${j}\.bit_rate=" "$probeFile" | awk -F'=' '{print $2}')
+      aChannels=$(grep "stream\.${j}\.channels=" "$probeFile" | awk -F'=' '{print $2}')
+      aLanguage=$(grep "stream\.${j}\..*language=" "$probeFile" | awk -F'=' '{print $2}')
+      if [[ $aLanguage != 'en' && $aLanguage != 'eng' ]]; then
+        traceIt $LINENO probeIt " info " "Audio stream $aStream is not tagged as english."
+        unset aStream  ## Skip non-english audio.
+        ((j++))
+        continue
+      fi
+      traceIt $LINENO probeIt " info " "audioMap=0:$j"
       traceIt $LINENO probeIt " info " "sample=$sample"
       traceIt $LINENO probeIt " info " "aBitRate=$aBitRate"
+      traceIt $LINENO probeIt " info " "aChannels=$aChannels"
       traceIt $LINENO probeIt " info " "aLanguage=$aLanguage"
-      set +x
+    elif grep -q 'subtitle' <<< "${stream[$j]}"; then
+      sCodec=$(grep "stream\.${j}\.codec_name=" "$probeFile" | awk -F'=' '{print $2}')
+      sLanguage=$(grep "stream\.${j}\..*language=" "$probeFile" | awk -F'=' '{print $2}')
+      # Cannot convert bitmap subtitles to text based within ffmpeg.
+      if [[ $sLanguage =~ (en|eng) && $sCodec == 'subrip' ]]; then
+        sStream="0:${j}"
+        sMap="$sMap -map $sStream"
+      fi
     fi
     ((j++))
   done
-
-  if [[ -z $audioMap ]]; then
-    # No audio found
-    streamMap="-map $videoMap"
-    noAudio=1
-  else
-    streamMap="-map $videoMap -map $audioMap"
-    noAudio=0
-  fi
-  traceIt $LINENO probeIt " info " "streamMap=$streamMap"
+ 
+  #Use last found audio if no english stream detected. 
+  aStream=${aStream:-$altStream}
 
   cat <<EOinfo >> "$dataFile"
 videoSize=$videoSize
 hSize=$hSize
 vSize=$vSize
 vBitRate=$vBitRate
+vFrameRate=$vFrameRate
 sample=$sample
 aBitRate=$aBitRate
+aChannels=$aChannels
+aLanguage=$aLanguage
 duration=$duration
-streamMap=$streamMap
+streams:
+  video=$vStream
+  audio=$aStream
+  subs=$sMap
 EOinfo
+
+  #set +x
   return 0
 }
 
 normalizeIt ()
 {
-  # set -x
-  inFile=$1
-  if (( noAudio == 1 )); then
+  #set -x
+  inFile="${fullName[$l]}"
+  if [[ -z $aStream ]]; then
+    aOpts=
     logIt "No audio to normalize, skipping."
     return 1
   fi
 
+  traceIt $LINENO nrmlzIt " info " "Sample command:"
   cat << EOcmd >> "$traceLog"
-> ffmpeg -y -i "$inFile" $streamMap \\
-  -af volumedetect -vn -sn -f mp4 /dev/null |\\
-  grep 'mean_volume' | awk -F':' '{print \$2}' | awk '{print \$1}'
+> ffmpeg -hide_banner -y $range -i "$inFile" -map $aStream -vn -sn -filter:a loudnorm=print_format=json \
+-f mp4 /dev/null 2>&1 | sed -n '/{/,/}/p' > "$tempDir/sample.json"
 EOcmd
 
   # shellcheck disable=SC2086
-  avgVolume=$(ffmpeg -y $range -i "$inFile" $streamMap -af volumedetect -vn -sn -f mp4 \
-    /dev/null 2>&1 | grep 'mean_volume' | awk -F':' '{print $2}' | awk '{print $1}')
+  ffmpeg -hide_banner -y $range -i "$inFile" -vn -sn -filter:a loudnorm=print_format=json \
+    -f mp4 /dev/null 2>&1 | sed -n '/{/,/}/p' > "$tempDir/sample.json"
 
-  traceIt $LINENO nrmlzIt " info " "avgVolume=$avgVolume"
-  dbAdjust=$(echo "scale=1;-27 - $avgVolume" | bc)
-  # dbAdjust=$(echo "scale=1;-33 - $avgVolume" | bc)
-  traceIt $LINENO nrmlzIt " info " "dbAdjust=$dbAdjust"
+  input_i=$(jq .input_i < $tempDir/sample.json | tr -d '"')
+  input_tp=$(jq .input_tp < $tempDir/sample.json | tr -d '"')
+  input_lra=$(jq .input_lra < $tempDir/sample.json | tr -d '"')
+  input_thresh=$(jq .input_thresh < $tempDir/sample.json | tr -d '"')
 
-  # Determine if dB adjustment is needed (0.5 is minimum amount required for adjustment)
-  dbCheck=$(echo "$dbAdjust" | tr -d -)
-  adjustDB=$(echo "$dbCheck > 0.5" | bc)
-  traceIt $LINENO nrmlzIt " info " "adjustDB=$adjustDB"
-  return 0
-}
+  aOpts="loudnorm=linear=true:measured_I=$input_i:measured_tp=$input_tp:measured_LRA=$input_lra:measured_thresh=$input_thresh"
 
-filterIt ()
-{
-  unset filterOpts
-  inFile=$1
-  traceIt $LINENO flterIt " info " "inFile=\"$inFile\""
-  
-  # # Filter logo if bitmap detected.
-  # if [[ -e "$inDir/${baseName[$l]}.png" ]]
-  # then
-  #   filterOpts="-vf removelogo=${baseName[$l]}.png"
-  # fi
+  traceIt $LINENO nrmlzIt " info " "aOpts=$aOpts"
 
-  # Resize video if larger than 1280x720 or smaller than 720x400
-  if (( hSize > 1280 )); then
-    filterOpts="-vf scale=1280:trunc\(ow/a/2\)*2"
-    CRF=$((targetCRF-1))
-  elif (( hSize < 720 )); then
-    filterOpts="-vf scale=720:trunc\(ow/a/2\)*2"
-    CRF=$((targetCRF-1))
-  else
-    # Reset to original value
-    CRF=$targetCRF
-  fi
-  traceIt $LINENO flterIt " info " "filterOpts=$filterOpts"
-
+#  ## CHANGING TO MAX VOLUME DETECT
+#  avgVolume=$(ffmpeg -y -i "$inFile" -map $aStream -af volumedetect -vn -sn \
+#    -f mp4 /dev/null 2>&1 | grep 'max_volume:' | awk '{ print $5 }')
+#  # Incase unable to detect volume level.
+#  avgVolume=${avgVolume:-27}
+#
+#  traceIt $LINENO nrmlzIt " info " "avgVolume=$avgVolume"
+#  dbAdjust=$(echo "scale=1;-9 - $avgVolume" | bc)
+#  # dbAdjust=$(echo "scale=1;-33 - $avgVolume" | bc)
+#  traceIt $LINENO nrmlzIt " info " "dbAdjust=$dbAdjust"
+#
+#  # Determine if dB adjustment is needed (0.5 is minimum amount required for adjustment)
+#  dbCheck=$(echo "$dbAdjust" | tr -d -)
+#  adjustDB=$(echo "$dbCheck > 0.5" | bc)
+#  traceIt $LINENO nrmlzIt " info " "adjustDB=$adjustDB"
+#  #set +x
   return 0
 }
 
 getMeta ()
 {
   # Metadata 
-  # Oh, you have no idea how painful this was to debug and make work...
-  metaFile="${workDir}/${baseName[$l]}.meta"
-  traceIt $LINENO getMeta " info " "metaFile=$metaFile"
-  echo ";FFMETADATA1" > "$metaFile"
-  metaData[0]="date=$(date '+%Y-%m-%d')"
-  metaData[1]="comment=(see synopsis for encode opts)"
-  metaData[2]="synopsis=$videoOpts $codecOpts $audioOpts"
-  metaData[3]="title=${baseName[$l]}"
-  metaData[4]="composer=theGh0st"
+  inFile=${baseName[$l]}
+  traceIt $LINENO "getMeta" " info " "inFile=${inFile}"
+  fTitle=$(awk -F'[()]' '{print $1}' <<< "$inFile")
+  traceIt $LINENO "getMeta" " info " "fTitle=${fTitle}"
+  fDate=$(awk -F'[()]' '{ print $2 }' <<< "$inFile" | awk '{ print $1 }')
+  traceIt $LINENO "getMeta" " info " "fDate=${fDate}"
+  mSearch="${fTitle} ${fDate}"
+  metaFile="${workDir}/${inFile}.meta"
+  htmlFile="${workDir}/${inFile}.html"
+  unset meta_title meta_data meta_synopsis 
 
+  mSite="https://www.themoviedb.org"
+
+  #echo -e "\n${C8}DEBUG: googler -w \"$mSite\" -C -n 5 --np \"$mSearch\" |\
+  #  grep -A1 \"$fTitle\" | grep -m 1 'https://.*\/movie'${C0}"
+  urlLink=$(googler -w "$mSite" -C -n 5 --np "${mSearch}" |\
+    grep -A1 "$fTitle" | grep -m 1 'https://.*\/movie' | tr -d ' ')
+  curlCmd="curl -s -k $urlLink | hxnormalize -l 9999 -x >\"$htmlFile\" 2>&1"
+
+  if [[ -n "$urlLink" ]]; then
+    eval "$curlCmd"
+    meta_title=$(hxselect -ic .title h2 <"$htmlFile" | w3m -dump -T 'text/html')
+    # Using w3m to sanitize output.
+    meta_synopsis=$(hxselect -ic .overview <"$htmlFile" | w3m -dump -cols 9999 -T 'text/html')
+    releaseDate=$(hxselect -c .releases li <"$htmlFile" |\
+      sed 's/<img.*\/img>//' | w3m -dump -T 'text/html' | head -n 1)
+    meta_date=$(date -d "$releaseDate" +%m/%d/%Y)
+    #rm "$htmlFile"
+  fi
+  meta_title=${meta_title:-$fTitle}
+  meta_date=${meta_date:-$fDate}
+  meta_synopsis=${meta_synopsis:-'No info'}
+  meta_composer="the Gh0st"
+  meta_comment="$complexOpts $videoOpts $audioOpts $subOpts"
+
+  echo ";FFMETADATA1" > "$metaFile"
+  metaData[0]="title=$meta_title"
+  metaData[1]="date=$meta_date"
+  metaData[2]="synopsis=$meta_synopsis"
+  metaData[3]="comment=$meta_comment"
+  metaData[4]="composer=$meta_composer"
+
+  echo -e "\n   ${C3}urlLink: ${C7}$urlLink${C0}"
+  echo -e "     ${C3}Title: ${C4}$meta_title${C0}"
+  echo -e "  ${C3}Released: ${C4}$meta_date${C0}"
+  echo -e "  ${C3}Synopsis: ${C2}$meta_synopsis${C0}\n"
+  
   j=0
   while (( j < ${#metaData[*]} ))
   do
-    logIt "getMetadata.metaData[$j]=${metaData[$j]}"
     echo "${metaData[$j]}" >> "$metaFile"
     j=$((j+1))
   done
+
   return 0
 }
 
 setOpts ()
 {
-  unset audioOpts codecOpts videoOpts encodeOpts
-  traceIt $LINENO setOpts " info " "vBitRate=$vBitRate"
-  traceIt $LINENO setOpts " info " "maxBitrate=$maxBitrate"
-  if (( vBitRate > maxBitrate )); then
-    outBitRate=$maxBitrate
+  ## Set video encode options per level
+
+  # Check if video resize is enabled (default).
+  if [[ $vResize != 'true' ]]; then
+    traceIt $LINENO setOpts " info " "Skipping video resize due to override."
   else
-    outBitRate=$vBitRate
+    # Resize video if larger than 1280x720 or smaller than 720x400
+    if (( hSize > 1280 )); then
+      vOpts="scale=1280:-2,fps=fps=24000/1001"
+      CRF=$((targetCRF-1))
+    elif (( hSize < 720 )); then
+      vOpts="scale=720:-2,fps=fps=24000/1001"
+      CRF=$((targetCRF-1))
+    fi
   fi
-  traceIt $LINENO setOpts " info " "outBitRate=$outBitRate"
-  # videoOpts="-c:v libx264 -preset $vPreset -tune $vTune -r 24000/1001 -refs 3 -crf $CRF -maxrate ${outBitRate} -bufsize ${bufSize}k"
-  videoOpts="-c:v libx264 -preset $vPreset -tune $vTune -r $vFrameRate -refs 3 \
-    -crf $CRF -maxrate ${outBitRate}k -bufsize ${bufSize}k"
-  # videoOpts="-c:v libx265 -preset $vPreset -r $vFrameRate -refs 3 -crf $CRF \
-  #  -maxrate ${outBitRate}k -bufsize ${bufSize}k"
+  CRF=${CRF:-$targetCRF}
+
+  ## Set frame rate if not resized.
+  vOpts="${vOpts:-fps=fps=24000/1001}"
+
+  # This can be used to blur logo maps.
+  # Filter logo if bitmap detected.
+  if [[ -e "${inDir}/${baseName[$l]}.png" ]]; then
+    # shellcheck disable=SC2089
+    vOpts="${vOpts},removelogo=\"${inDir}/${baseName[$l]}.png\""
+  fi
+  traceIt $LINENO setOpts " info " "vOpts=$vOpts"
+
+  if [[ -n $vOpts ]]; then
+    vMap="-map [vOut]"
+  else
+    vMap="-map $vStream"
+  fi
+  traceIt $LINENO setOpts " info " "vMap=$vMap"
+
+  ## Build video codec arguments
+  # EXAMPLE: videoOpts="-c:v libx264 -crf $CRF -preset $vPreset -tune $vTune \
+  #          -refs 3 -maxrate $maxBitrate -bufsize $bufSize $vExtra"
+  videoOpts="-c:v libx264"
+  videoOpts="$videoOpts -crf $CRF"
+  videoOpts="$videoOpts -preset $vPreset"
+  videoOpts="$videoOpts -tune $vTune"
+#  if [[ -n $vFrameRate ]]; then
+#    videoOpts="$videoOpts -r $vFrameRate"
+#  fi
+  if [[ -n $maxBitrate ]]; then
+    videoOpts="$videoOpts -maxrate $maxBitrate"
+  fi
+  if [[ -n $bufSize ]]; then
+    videoOpts="$videoOpts -bufsize $bufSize"
+  fi
+#  if [[ -n $vExtra ]]; then
+#    videoOpts="$videoOpts $vExtra"
+#  fi
   traceIt $LINENO setOpts " info " "videoOpts=$videoOpts"
 
-  # codecOpts="-x264opts ref=3:deblock=0,-1"
-  traceIt $LINENO setOpts " info " "codecOpts=$codecOpts"
-
-  if (( noAudio == 0 && adjustDB == 1 )); then
-    audioOpts="-c:a libfdk_aac -b:a 128k -af volume=${dbAdjust}dB"
-  elif (( noAudio == 0 && adjustDB == 0 )); then
-    audioOpts="-c:a libfdk_aac -b:a 128k"
-  else
-    audioOpts="-an"
+  ## Build audo codec arguments
+  audioOpts="-c:a libfdk_aac"
+  if [[ -n $aBitrate ]]; then
+    audioOpts="$audioOpts -b:a $aBitrate"
   fi
-  traceIt $LINENO setOpts " info " "audioOpts=$audioOpts"
+  if [[ $aRemix != 'true' ]]; then
+    audioOpts="$audioOpts -channels $aChannels"
+  fi
+  if [[ -n $aOpts ]]; then
+    aMap="-map [aOut]"
+    audioOpts="$audioOpts -ar 48k"
+  else
+    audioOpts='-an'
+    aMap=
+  fi
 
-  encodeOpts="$streamMap $videoOpts $codecOpts $audioOpts $filterOpts -sn"
+  traceIt $LINENO setOpts " info " "audioOpts=$audioOpts"
+  traceIt $LINENO setOpts " info " "aOpts=$aOpts"
+  traceIt $LINENO setOpts " info " "aMap=$aMap"
+
+  ## Build subtitle options
+  if [[ -n $sStream ]]; then
+    subOpts="-c:s mov_text -metadata:s:s:0 language=eng"
+  else
+    subOpts="-sn"
+    sMap=
+  fi
+  traceIt $LINENO setOpts " info " "subOpts=$subOpts"
+
+  ## Create complex filters
+  if [[ -n $aOpts ]]; then
+    complexOpts="-filter_complex [$vStream]${vOpts}[vOut];[$aStream]${aOpts}[aOut]"
+  else
+    complexOpts="-filter_complex [$vStream]${vOpts}[vOut]"
+  fi
+  traceIt $LINENO setOpts " info " "complex_opts=$complexOpts"
+
+  ## Build final map
+  streamMap=$vMap
+  if [[ -n $aMap ]]; then
+    streamMap="$streamMap $aMap"
+  fi
+  if [[ -n $sMap ]]; then
+    streamMap="$streamMap $sMap"
+  fi
+  traceIt $LINENO setOpts " info " "streamMap=$streamMap"
+
+  encodeOpts="$videoOpts $audioOpts $subOpts"
   traceIt $LINENO setOpts " info " "encodeOpts=$encodeOpts"
+
+  return 0
 }
 
 encodeIt ()
 {
-  inFile=$1
-  mkdir -p "$outDir/${directory[$l]}"
-  chmod -R 0775 "$outDir"
-  chown -R 10001107:serviio "$outDir"
-  outFile="${outDir}${directory[$l]}/${baseName[$l]}-ø.mp4"
-  # Check for skip sample option or video mode
-  traceIt $LINENO encdeIt " info " "ffmpeg -hide_banner -loglevel fatal -y -i \"$inFile\" -i \"$metaFile\" -map_metadata 1 $encodeOpts \"$outFile\""
+  inFile="${fullName[$l]}"
 
-  echo -e "                                     total time=${C4}$duration${C0}"
-  # ffmpeg -hide_banner -y -loglevel fatal \
-  # shellcheck disable=SC2086
-  ffmpeg -hide_banner -y -loglevel quiet -stats \
-    -i "$inFile" \
-    -i "$metaFile" \
-    -map_metadata 1 \
-    $encodeOpts \
-    "$outFile"
-  STATUS=$?
-
-  origSize=$(du "$inFile" | cut -f1)
-  newSize=$(du "$outFile" | cut -f1)
-  diff=$(echo "scale=4; (($newSize - $origSize)/$origSize)*100" | bc | sed -r 's/0{2}$//')
-  if [[ $(echo "$diff < 0" | bc) ]]; then
-    echo "-------------------------" | tee -a "$logFile"
-    echo -e "File ${C1}decreased${C0} by: ${C1}$(echo "- $diff" | bc)%${C0}" | tee -a "$logFile"
-    echo "-------------------------" | tee -a "$logFile"
+  if [[ ! -d "${outDir[$l]}" ]]; then
+    mkdir -p "${outDir[$l]}"
+    chown rp01:admins "${outDir[$l]}"
+    chmod 775 "${outDir[$l]}"
+  fi
+  if [[ $Q != 'HQ' ]]; then 
+    outFile="${outDir[$l]}/${baseName[$l]}.mp4"
+    echo -e "         ${C3}Output:${C6} ...${baseDir[$l]}/${baseName[$l]}.mp4${C0}\n"
   else
-    echo "-------------------------" | tee -a "$logFile"
-    echo -e "File ${C5}increased${C0} by: ${C5}${diff}%${C0}" | tee -a "$logFile"
-    echo "-------------------------" | tee -a "$logFile"
+    outFile="${outDir[$l]}/${baseName[$l]}-∞.mp4"
+    echo -e "         ${C3}Output:${C6} ...${baseDir[$l]}/${baseName[$l]}-∞.mp4${C0}\n"
   fi
 
+  tempOut="$tempDir/converting.mp4"
+
+  traceIt $LINENO encdeIt " CMD  " "> ffmpeg -hide_banner -y -loglevel quiet -stats -i \"$inFile\" -i \"$metaFile\" -map_metadata 1 $complexOpts $encodeOpts $streamMap \"$outFile\""
+
+  echo -e "                                     total time=${C4}$duration${C0}"
+  # shellcheck disable=SC2086,SC2090
+  ffmpeg -hide_banner -y -loglevel quiet -stats -i "$inFile" -i "$metaFile" \
+    -map_metadata 1 $complexOpts $encodeOpts $streamMap "$tempOut"
+  STATUS=$?
+
+  echo ""
+  displayIt "ffmpeg encoded ${fileName[$l]}"
+
   if (( STATUS > 0 )); then
+    killWait 1
     logIt "Re-encoding for $inFile failed!"
     traceIt $LINENO encdeIt "ERROR!" "STATUS=$STATUS, ffmpeg failed."
+    echo -e "> ${C5}ffmpeg -y -i \"$inFile\" -i \"$metaFile\" -map_metadata 1 \
+      $complexOpts $encodeOpts $streamMap \"$tempOut\"${C0}\n"
+    #exit 9
   else
-    logIt "orig size = $(du -h "$inFile" | cut -f1)"
-    logIt " new size = $(du -h "$outFile" | cut -f1)"
-    rm "$probeFile"
-    rm "$dataFile"
-    rm "$metaFile"
-    mv "$inFile" "$doneDir" >/dev/null 2>&1
+    mv "$tempOut" "$outFile"
+    killWait 0
+    origSize=$(du -b "$inFile" | cut -f1)
+    newSize=$(du -b "$outFile" | cut -f1)
+    diff=$(echo "scale=4; (($newSize - $origSize)/$origSize)*100" | bc | sed -r 's/0{2}$//')
+    origHuman="$(du -h "$inFile" | cut -f1)"
+    newHuman="$(du -h "$outFile" | cut -f1)"
+    if (( $(echo "$diff < 0" | bc) )); then
+      {
+        echo "-------------------------"
+        echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C1}File decreased by: $(echo "- $diff" | bc)%${C0}"
+        echo "-------------------------"
+      } | tee -a "$logFile"
+    else
+      {
+        echo "-------------------------" | tee -a "$logFile"
+        echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C5}File increased by: ${diff}%${C0}"
+        echo "-------------------------"
+      } | tee -a "$logFile"
+    fi
+
+    rm "$probeFile" "$dataFile" "$metaFile" "$htmlFile" >/dev/null 2>&1
+    unset sMap aMap vMap
+
+    {
+      mkdir -p "$doneDir/${baseDir[$l]}"
+      chgrp -R admins "$doneDir/${baseDir[$l]}"
+      mv "${fullName[$l]}" "$doneDir/${baseDir[$l]}/"
+    } >> "$traceLog" 2>&1
+
     logIt "outFile = $outFile"
+    # Setting permission on outFile.
+    chown rp01:admins "$outFile"
     chmod 0664 "$outFile"
-    chown 10001107:serviio "$outFile"
   fi
 
   return $STATUS
 }
 
+usage()
+{
+  cat << EOM
+NAME
+    $0 - video converter
+
+SYNOPSIS
+    $0 [OPTION]
+
+DESCRIPTION
+    Re-encodes video files to sane/portable parameters.
+
+    -h, --help
+        This documentation.
+
+    --hq
+        Will re-encode video with high quality settings.
+
+    --lq
+        Will re-encode video with low quality settings.
+
+    -m, --movie
+        Will look for feature lenth movies in configured directory.
+
+    -o, --other
+        Will look for other type video files in configured directory.
+
+    -s, --series
+        Will look for series shows in configured directory.
+        
+    -v, --video
+        Will look for video files in configured directory.
+
+    -x. --restrict
+        Will look for restricted videos in configured directory.
+
+AUTHOR
+    Written by Richard L. Paxton.
+
+EXAMPLE
+    The following would search for movie files and re-encode them at high quality.
+    $0 -m --hq
+
+EOM
+  exit 1
+}
+
+## Checking for required packages.
+command -v ffmpeg >/dev/null 2>&1 || { echo "ERROR: Unable to detect ffmpeg, bailing." >&2; exit 1; }
+command -v googler >/dev/null 2>&1 || { echo "ERROR: googler is not installed, bailing." >&2; exit 1; }
+command -v hxnormalize > /dev/null 2>&1 || { echo "ERROR: html-xml-utils is not installed, bailing." >&2; exit 1; }
+command -v w3m > /dev/null 2>&1 || { echo "ERROR: w3m is not installed, bailing." >&2; exit 1; }
+
 
 ###  START OF MAIN  ###
+# Check for command line arguments.
+if [ "$#" -lt 1 ]; then
+  usage
+fi
+## Get arguments.
+while [[ $# -gt 0 ]]; do
+  key="$1"
+  case $key in
+#    -b | --bitrate) # Target bitrate
+#      targetBitrate=${2:-48}
+#      shift 2
+#      ;;
+    -h | --help) #Display help
+      usage
+      ;;
+    --hq) #Set high quality override
+      Q='HQ'
+      shift
+      ;;
+    --lq)  #Set low quality override
+      Q='LQ'
+      shift
+      ;;
+    -m | --movie) #Process movies
+      inDir="$searchDir/features"
+      aBitrate='160k'
+      aRemix=true
+      bufSize='2m'
+      maxBitrate='8m'
+      targetCRF=22
+      vPreset='medium'
+      vResize=true
+      vTune='film'
+      shift
+      ;;
+    -o | --other) #Process other videos
+      inDir="$searchDir/other"
+      aBitrate='128k'
+      aRemix=true
+      bufSize='2m'
+      maxBitrate='6m'
+      targetCRF=22
+      vPreset='medium'
+      vResize=true
+      vTune='film'
+      shift
+      ;;
+    -s | --series) #tv series encodes
+      inDir="$searchDir/series"
+      aBitrate='128k'
+      aRemix=true
+      bufSize='2m'
+      maxBitrate='8m'
+      targetCRF=23
+      vPreset='medium'
+      vResize=true
+      vTune='film'
+      shift
+      ;;
+    -v | --video) #video files
+      inDir="$searchDir/video"
+      aBitrate='160k'
+      aRemix=true
+      bufSize='2m'
+      maxBitrate='8m'
+      targetCRF=21
+      vPreset='medium'
+      vResize=false
+      vTune='film'
+      shift
+      ;;
+    -x | --restricted) #restriced videos
+      inDir="$searchDir/restricted"
+      aBitrate='92k'
+      aRemix=true
+      bufSize='2m'
+      maxBitrate='4m'
+      targetCRF=23
+      vPreset='fast'
+      vResize=true
+      vTune='film'
+      shift
+      ;;
+    *)  #Unknown option
+      echo -e "${C5}ERROR: 10 - Unknown option '$1'${C0}"
+      usage
+      ;;
+  esac
+
+  if [[ $Q == 'HQ' ]]; then
+      aBitrate='192k'
+      aRemix=false
+      targetCRF=20
+      vPreset='slower'
+      vResize=false
+      vTune='film'
+    elif [[ $Q == 'LQ' ]]; then
+      aBitrate='92k'
+      aRemix=true
+      bufSize='2m'
+      maxBitrate='2m'
+      targetCRF=23
+      vPreset='medium'
+      vResize=true
+      vTune='film'
+  fi
+
+done
+
+# Video Defaults unless overridden
+# targetVBR=3
+# vExtra='profile:v high -level 3.2'
+
+if [[ $UID -gt 0 ]]; then
+  echo -e "Must run as root user for file permissions."
+  exit 2
+fi
+
 traceIt $LINENO " MAIN  " " info " "*** START OF NEW RUN ***"
 echo -e "${C3}\nStarting run of ${C6}Video Converter${C0}"
+umask 002
 
 displayIt "Collecting list of files to process"
 getFiles
@@ -484,8 +759,7 @@ killWait 0
 
 l=0
 while (( l < ${#fullName[*]} )); do
-  traceIt $LINENO " MAIN  " " info " "START OF LOOP: $l"
-  # baseName[$l]="$(basename "${fullName[$l]}" | sed 's/\.[^.]*$//')"
+  traceIt $LINENO " MAIN  " " info " "START OF LOOP: $((l+1)) of $((${#fullName[*]}+1))"
   traceIt $LINENO " MAIN  " " info " "baseName=${baseName[$l]}"
   echo "" >> $logFile
   logIt "v----------------------------------------------------------v"
@@ -493,39 +767,41 @@ while (( l < ${#fullName[*]} )); do
   logIt "------------------------------------------------------------"
   logIt "inFile=${fullName[$l]}"
 
-  displayIt "Processing:" "${baseName[$l]}"
-  probeIt "${fullName[$l]}"
+  echo -e "\nFile $((l+1)) of $((${#fullName[*]}+1))"
+  displayIt "Processing:" "${baseDir[$l]}/${baseName[$l]}"
+  probeIt 
   killWait 0
 
   displayIt "Normalizing audio track"
-  normalizeIt "${fullName[$l]}"
-  if [[ $? -gt 0 ]]; then
-    killWait 2
-  else
+  if normalizeIt; then
     killWait 0
+  else
+    killWait 2
   fi
 
   displayIt "Setting encode filters"
-  filterIt "${fullName[$l]}"
   setOpts
-  getMeta "${fullName[$l]}"
   killWait 0
+  getMeta "${fullName[$l]}"
+  echo -e "     ${C3}Stream map:${C6} $streamMap${C0}"
+  echo -e "     ${C3}Video Opts:${C6} $videoOpts${C0}"
+  echo -e "     ${C3}Audio Opts:${C6} $audioOpts${C0}"
+  echo -e "       ${C3}Sub Opts:${C6} $subOpts${C0}"
+  echo -e "${C3}Complex Filters:${C6} $complexOpts${C0}"
 
-  # displayIt "Encoding video file"
   encodeIt "${fullName[$l]}"
-#  if [[ $? -gt 0 ]]; then
-#    killWait 1
-#  else
-#    killWait 0
-#  fi
 
   logIt "------------------------------------------------------------"
-  logIt "End of ${baseName[$l]}"
+  logIt "End of ${baseName[$l]} "
   logIt "^----------------------------------------------------------^"
-  traceIt $LINENO " MAIN  " " info " "END OF LOOP: $l"
+  traceIt $LINENO " MAIN  " " info " "END OF LOOP: $((l+1))"
+  echo "" >> "$traceLog"
   echo -e "  ${C2}Done${C0}"
   ((l++))
 done
 
-echo -e "${C3}End of Video Converter run.${C0}"
+## Clean empty incoming directories.
+find "$inDir/" -type d -empty -delete
 
+echo -e "${C3}End of Video Converter run.${C0}"
+exit 0
