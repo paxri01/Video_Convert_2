@@ -194,7 +194,7 @@ probeIt ()
   dataFile="$workDir/${baseName[$l]}.data"
   # In case of multiple runs.
   rm -f "$probeFile" "$dataFile" >/dev/null 2>&1
-  ffprobe -show_entries streams -sexagesimal -of flat "$inFile" > "$probeFile" 2>&1
+  ffprobe -hide_banner -show_entries streams -sexagesimal -of flat "$inFile" > "$probeFile" 2>&1
   sed -i 's/\"//g' "$probeFile"
   # To handle bitmap subs vs. text subtitles
   sed -i '/^programs\./d' "$probeFile"
@@ -392,23 +392,40 @@ setOpts ()
 {
   ## Set video encode options per level
 
+  scale=1
   # Check if video resize is enabled (default).
   if [[ $vResize != 'true' ]]; then
     traceIt $LINENO setOpts " info " "Skipping video resize due to override."
   else
     # Resize video if larger than 1280x720 or smaller than 720x400
     if (( hSize > 1280 )); then
-      vOpts="scale=1280:-2,fps=fps=24000/1001"
+      vOpts="scale=1280:-2,fps=$fps"
+      scale=$(echo "scale=6; (1280/$hSize)" | bc)
       CRF=$((targetCRF-1))
     elif (( hSize < 720 )); then
-      vOpts="scale=720:-2,fps=fps=24000/1001"
+      vOpts="scale=720:-2,fps=fps=$fps"
+      scale=$(echo "scale=6; (720/$hSize)" | bc)
       CRF=$((targetCRF-1))
     fi
   fi
-  CRF=${CRF:-$targetCRF}
 
   ## Set frame rate if not resized.
-  vOpts="${vOpts:-fps=fps=24000/1001}"
+  vOpts="${vOpts:-fps=fps=$fps}"
+
+  CRF=${CRF:-$targetCRF}
+
+  if [[ $scale != "1" ]]; then
+    _vSize=$(printf "%.0f" "$(echo "scale=2; $vSize*$scale" | bc)")
+    _hSize=$(printf "%.0f" "$(echo "scale=2; $hSize*$scale" | bc)")
+  fi
+  traceIt $LINENO setOpts " info " "scale=$scale"
+
+  ## Determine target bit rate to yield desired Qf
+  TBR=$(printf "%.0f" "$(echo "scale=2; ($Qf*$_hSize*$_vSize*$fps)/1000" | bc)")
+  traceIt $LINENO setOpts " info " "TBR=${TBR}k"
+  ## TODO Remove bufSize/maxBitrate
+  traceIt $LINENO setOpts " info " "bufSize=${bufSize}"
+  traceIt $LINENO setOpts " info " "maxBitrate=${maxBitrate}"
 
   # This can be used to blur logo maps.
   # Filter logo if bitmap detected.
@@ -429,18 +446,19 @@ setOpts ()
   # EXAMPLE: videoOpts="-c:v libx264 -crf $CRF -preset $vPreset -tune $vTune \
   #          -refs 3 -maxrate $maxBitrate -bufsize $bufSize $vExtra"
   videoOpts="-c:v libx264"
-  videoOpts="$videoOpts -crf $CRF"
+  #videoOpts="$videoOpts -crf $CRF"
+  videoOpts="$videoOpts -b:v ${TBR}k"
   videoOpts="$videoOpts -preset $vPreset"
   videoOpts="$videoOpts -tune $vTune"
 #  if [[ -n $vFrameRate ]]; then
 #    videoOpts="$videoOpts -r $vFrameRate"
 #  fi
-  if [[ -n $maxBitrate ]]; then
-    videoOpts="$videoOpts -maxrate $maxBitrate"
-  fi
-  if [[ -n $bufSize ]]; then
-    videoOpts="$videoOpts -bufsize $bufSize"
-  fi
+#  if [[ -n $maxBitrate ]]; then
+#    videoOpts="$videoOpts -maxrate $maxBitrate"
+#  fi
+#  if [[ -n $bufSize ]]; then
+#    videoOpts="$videoOpts -bufsize $bufSize"
+#  fi
 #  if [[ -n $vExtra ]]; then
 #    videoOpts="$videoOpts $vExtra"
 #  fi
@@ -647,19 +665,21 @@ while [[ $# -gt 0 ]]; do
       usage
       ;;
     --hq) #Set high quality override
-      Q='HQ'
+      Qf='.2'
       shift
       ;;
     --lq)  #Set low quality override
-      Q='LQ'
+      Qf='.08'
       shift
       ;;
     -m | --movie) #Process movies
       inDir="$searchDir/features"
       aBitrate='160k'
       aRemix=true
-      bufSize='2m'
-      maxBitrate='8m'
+      Qf=${Qf:-'.1'}
+      fps='23.97'
+      bufSize='2M'
+      maxBitrate='8M'
       targetCRF=22
       vPreset='medium'
       vResize=true
@@ -670,8 +690,9 @@ while [[ $# -gt 0 ]]; do
       inDir="$searchDir/other"
       aBitrate='128k'
       aRemix=true
-      bufSize='2m'
-      maxBitrate='6m'
+      Qf=${Qf:-'.1'}
+      bufSize='2M'
+      maxBitrate='6M'
       targetCRF=22
       vPreset='medium'
       vResize=true
@@ -682,8 +703,10 @@ while [[ $# -gt 0 ]]; do
       inDir="$searchDir/series"
       aBitrate='128k'
       aRemix=true
-      bufSize='2m'
-      maxBitrate='8m'
+      Qf=${Qf:-'.1'}
+      fps='23.97'
+      bufSize='2M'
+      maxBitrate='4M'
       targetCRF=23
       vPreset='medium'
       vResize=true
@@ -694,8 +717,10 @@ while [[ $# -gt 0 ]]; do
       inDir="$searchDir/video"
       aBitrate='160k'
       aRemix=true
-      bufSize='2m'
-      maxBitrate='8m'
+      Qf=${Qf:-'.2'}
+      fps='30'
+      bufSize='2M'
+      maxBitrate='8M'
       targetCRF=21
       vPreset='medium'
       vResize=false
@@ -706,8 +731,10 @@ while [[ $# -gt 0 ]]; do
       inDir="$searchDir/restricted"
       aBitrate='92k'
       aRemix=true
-      bufSize='2m'
-      maxBitrate='4m'
+      Qf=${Qf:-'.08'}
+      fps='23.97'
+      bufSize='2M'
+      maxBitrate='4M'
       targetCRF=23
       vPreset='fast'
       vResize=true
@@ -720,18 +747,18 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 
-  if [[ $Q == 'HQ' ]]; then
+  if [[ $Qf == '.2' ]]; then
       aBitrate='192k'
       aRemix=false
       targetCRF=20
       vPreset='slower'
       vResize=false
       vTune='film'
-    elif [[ $Q == 'LQ' ]]; then
+    elif [[ $Qf == '.08' ]]; then
       aBitrate='92k'
       aRemix=true
-      bufSize='2m'
-      maxBitrate='2m'
+      bufSize='2M'
+      maxBitrate='2M'
       targetCRF=23
       vPreset='medium'
       vResize=true
@@ -748,6 +775,8 @@ if [[ $UID -gt 0 ]]; then
   echo -e "Must run as root user for file permissions."
   exit 2
 fi
+
+typeset scale=1 TBR=4096
 
 traceIt $LINENO " MAIN  " " info " "*** START OF NEW RUN ***"
 echo -e "${C3}\nStarting run of ${C6}Video Converter${C0}"
