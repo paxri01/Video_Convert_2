@@ -94,7 +94,7 @@ echo "                                                $duration"
 ffmpeg -hide_banner -y -loglevel quiet -stats -i "$inFile" $complexOpts $videoOpts $audioOpts $subOpts ./temp.mp4
 
 mv -f ./temp.mp4 "${baseName}.mp4"
-chown 10001107:admins "${baseName}.mp4"
+chown rp01:admins "${baseName}.mp4"
 chmod 664 "${baseName}.mp4"
 
 ffp "${baseName}.mp4"
