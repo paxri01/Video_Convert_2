@@ -5,8 +5,8 @@
 # format base on the command line arguments.
 
 # Program settings
-  ffmpeg_bin='/usr/local/bin/ffmpeg'
-  #ffmpeg_bin='/usr/bin/ffmpeg'
+  #ffmpeg_bin='/usr/local/bin/ffmpeg'
+  ffmpeg_bin='/usr/bin/ffmpeg'
   #sample_range="-t 10:00"
   sample_range="-ss 01:00 -t 06:00"
   baseDir='/data2/usenet'
@@ -465,7 +465,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
   
     ##  Build video codec string
     vOpts="-c:v $video_codec "
-  
+
     # Calculate video bitrate
     #shellcheck disable=SC2154  # vHeight sourced from probeIt()
     _vSize=$(printf "%.0f" "$(echo "scale=2; $vHeight*$scale" | bc)")
@@ -473,11 +473,10 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     target_vBitrate=$(printf "%.0f" "$(echo "scale=2; ($target_QF*$_hSize*$_vSize*$FPS)/1000" | bc)")
     traceIt $LINENO setOpts " info " "target_vBitrate=$target_vBitrate"
   
-    vOpts+="-b:v $target_vBitrate "
+    vOpts+="-b:v ${target_vBitrate}k "
     vOpts+="-preset $vPreset "
     vOpts+="-tune $vTune"
     traceIt $LINENO setOpts " info " "vOpts: $vOpts"
-  
   
     ## Build audio filter string
     #shellcheck disable=SC2154  # aMap sourced from probeIt()
@@ -496,7 +495,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
         #shellcheck disable=SC2154  # aChannels sourced from probeIt()
         aOpts+="-ac $aChannels "
       fi
-      aOpts+="-ar $target_sampleRate"
+      aOpts+="-ar ${target_sampleRate:-48k}"
     else
       aOpts='-an'
     fi
@@ -545,7 +544,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     ffmpeg_string+="$sOpts "
     tempOut="$tempDir/converting.mp4"
   
-
+    echo -e "\n${CDGR}> $ffmpeg_string $tempOut\n"
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
     echo -e "                                     total time=${CYEL}$duration${CNORM}"
