@@ -1,10 +1,10 @@
 #!/bin/bash
 
 inFile="$1"
-probeFile='.probe.txt'
+probeFile=$(mktemp)
 
-if [[ $# -lt 1 ]]; then
-  echo "Must specify input file, bailing."
+if [[ $# -lt 1 ]] || [[ ! -f $inFile ]]; then
+  echo "Must specify an existing input file, bailing."
   exit 2
 fi
 

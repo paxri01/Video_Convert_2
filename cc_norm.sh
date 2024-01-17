@@ -13,7 +13,7 @@ outFile="/tmp/sample.json"
 
 ff_string="${ffmpeg_bin} -hide_banner -y"
 ff_string+=" ${sample}"
-ff_string+=" -i '${inFile}'"
+ff_string+=" -i \"${inFile}\""
 ff_string+=" -vn -sn"
 ff_string+=" -filter:a loudnorm="
 ff_string+="I=${target_i}:"
@@ -34,6 +34,11 @@ measured_tp=$(jq -r .input_tp < "$outFile")
 measured_lra=$(jq -r .input_lra < "$outFile")
 measured_thresh=$(jq -r .input_thresh < "$outFile")
 measured_offset=$(jq -r .target_offset < "$outFile")
+
+if [[ -z "$measured_i" || -z "$measured_tp" || -z "$measured_lra" || -z "$measured_thresh" || -z "$measured_offset" ]]; then
+  echo "ERROR: Could not parse loudnorm output."
+  exit 1
+fi
 
 loudnorm_string+="-filter:a loudnorm="
 loudnorm_string+="print_format=summary:"

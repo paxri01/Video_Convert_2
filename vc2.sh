@@ -4,9 +4,25 @@
 # The script builds an array of incoming files and then probes the file and will convert it to the specified
 # format base on the command line arguments.
 
+# Expected incoming directory structure:
+# renamed/                            <-- This is the search directory.
+# ├── features
+# ├── mtv
+# ├── restricted
+# ├── series                          <-- This is the search directory with subdirectories for each series.
+# │   ├── Agatha Christies Poirot 
+# │   ├── FantomWorks
+# │   ├── Reacher
+# │   ├── The Curse of Oak Island
+# │   └── Undercover Billionaire
+# ├── video
+
+# The output directory structure will be duplicated from the search directory structure.
+# Starting at $videoDir base.
+
 # Program settings
-  #ffmpeg_bin='/usr/local/bin/ffmpeg'
-  ffmpeg_bin='/usr/bin/ffmpeg'
+  ffmpeg_bin='/usr/local/bin/ffmpeg'
+  #ffmpeg_bin='/usr/bin/ffmpeg'
   #sample_range="-t 10:00"
   sample_range="-ss 01:00 -t 06:00"
   baseDir='/data2/usenet'
@@ -88,17 +104,20 @@ EOM
       --hq) #Set high quality override
         hq='true'
         sample_range=''  # sample the entire video file
+        vResize='false'
         shift
         ;;
       --lq)  #Set low quality override
         lq='true'
+        audioChannels='2'
         shift
         ;;
       -m | --movie) #Process movies
         aRemix='true'
+        #audioChannels='2'
         inDir="$searchDir/features"
         sample_range='-t 15:00'  # 15 minute sample range from beginning
-        target_FPS='23.976'
+        target_FPS='24000/1001'
         target_QF='.1'
         target_aBitrate='160k'
         target_sampleRate='48k'
@@ -109,6 +128,7 @@ EOM
         ;;
       --mv) #music video files
         aRemix='true'
+        audioChannels='2'
         inDir="$searchDir/mtv"
         target_FPS='30'
         target_QF='.2'
@@ -121,8 +141,9 @@ EOM
         ;;
       -o | --other) #Process other videos
         aRemix='true'
+        #audioChannels='2'
         inDir="$searchDir/other"
-        target_FPS='23.976'
+        target_FPS='24000/1001'
         target_QF='.1'
         target_aBitrate='160k'
         target_sampleRate='48k'
@@ -133,8 +154,9 @@ EOM
         ;;
       -s | --series) #tv series encodes
         aRemix='true'
+        audioChannels='2'
         inDir="$searchDir/series"
-        target_FPS='23.976'
+        target_FPS='24000/1001'
         target_QF='.08'
         target_aBitrate='128k'
         target_sampleRate='48k'
@@ -145,6 +167,7 @@ EOM
         ;;
       -v | --video) #video files
         aRemix='true'
+        #audioChannels='2'
         inDir="$searchDir/video"
         target_FPS='30'
         target_QF='.2'
@@ -156,6 +179,7 @@ EOM
         ;;
       -x | --restricted) #restricted videos
         aRemix='true'
+        audioChannels='2'
         inDir="$searchDir/restricted"
         target_FPS='25'
         target_QF='.08'
@@ -209,7 +233,7 @@ EOM
   CRED='\033[38;5;160m'  # Red
   CPUR='\033[38;5;165m'  # Purple
   CBLU='\033[38;5;063m'  # Blue
-  CDGR='\033[38;5;234m'  # Dark
+  #CDGR='\033[38;5;234m'  # Dark
   CNORM='\033[0;00m'      # Reset
 
 # Define Global variables
@@ -252,18 +276,15 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     Text2="$2"
   
     if (( $# > 1 )); then
-      # shellcheck disable=SC2059
-      printf "  ${CGRY}$Text1${CNORM} ${CBLU}$Text2${CNORM}"  
-      printf '%*.*s' 0 $((padlength-${#Text1}-${#Text2}-10 )) "$pad"
+      printf "  %b" "${CGRY}${Text1}${CBLU}${Text2}${CNORM}"
+      printf '%*.*s' 0 $((padlength - ${#Text1} - ${#Text2} - 6 )) "$pad"
     else
-      # shellcheck disable=SC2059
-      printf "  ${CGRY}${Text1}${CNORM}"
+      printf "  %b" "${CGRY}${Text1}${CNORM}"
       printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
     fi
   
     rotate &
     rPID=$!
-    sleep 1
     return 0
   }
   
@@ -302,13 +323,13 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     tput cnorm
   
     case $FLAG in
-      "0") echo -e "[${C1}  OK  ${C0}]"
+      "0") echo -e "[${CGRN}  OK  ${CNORM}]"
         ;;
-      "1") echo -e "[${C5}ERROR!${C0}]"
+      "1") echo -e "[${CRED}ERROR!${CNORM}]"
         ;;
-      "2") echo -e "[${C4} WARN ${C0}]"
+      "2") echo -e "[${CYEL} WARN ${CNORM}]"
         ;;
-      *) echo -e "[${C6}UNKWN!${C0}]"
+      *) echo -e "[${CPUR}UNKWN!${CNORM}]"
         ;;
     esac
     return 0
@@ -396,7 +417,6 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
   {
     inFile="$1"
   
-    echo -e "${CDGR}\ncc_probe \"$inFile\"${CNORM}"
     cc_probe "$inFile"
     # shellcheck disable=SC1091
     source .probe.rc
@@ -493,7 +513,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
         aOpts+="-ac 2 "
       else
         #shellcheck disable=SC2154  # aChannels sourced from probeIt()
-        aOpts+="-ac $aChannels "
+        aOpts+="-ac ${audioChannels:-$aChannels} "
       fi
       aOpts+="-ar ${target_sampleRate:-48k}"
     else
@@ -530,8 +550,8 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
       outFile="${outDir[$l]}/${baseName[$l]}-∞.mp4"
     fi
 
-    #ffmpeg_string="${ffmpeg_bin} "
-    ffmpeg_string="ffmpeg "
+    ffmpeg_string="${ffmpeg_bin} "
+    #ffmpeg_string="ffmpeg "
     ffmpeg_string+="-hide_banner -y "
     ffmpeg_string+="-loglevel quiet -stats "
     ffmpeg_string+="-i \"$inFile\" "
@@ -544,7 +564,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     ffmpeg_string+="$sOpts "
     tempOut="$tempDir/converting.mp4"
   
-    echo -e "\n${CDGR}> $ffmpeg_string $tempOut\n"
+    #echo -e "\n${CDGR}> ${ffmpeg_string//-loglevel quiet -stats /} $tempOut${CNORM}\n"
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
     echo -e "                                     total time=${CYEL}$duration${CNORM}"
@@ -554,7 +574,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     if (( STATUS > 0 )); then
       logIt "Re-encoding of $inFile failed!"
       traceIt $LINENO encodeIt "ERROR!" "STATUS=$STATUS, ffmpeg encode failed."
-      echo -e "> ${CRED}$ffmpeg_string $tempOut${CNORM}\n"
+      echo -e "> ${CRED}ERROR: Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${CNORM}\n"
     else
       sudo mv -f "$tempOut" "$outFile"
       origSize=$(du -b "$inFile" | cut -f1)
@@ -617,7 +637,7 @@ while (( l < ${#fullName[@]})) && (( l < 50 )); do
   logIt "inFile=${fullName[$l]}"
 
   echo -e "\nFile $((l+1)) of ${#fullName[*]}"
-  displayIt "Processing: ${baseDir[$l]}/${baseName[$l]}" 
+  displayIt "Processing: " "${baseDir[$l]}/${baseName[$l]}" 
   sleep 1
   probeIt "${fullName[$l]}"
   killWait $?
