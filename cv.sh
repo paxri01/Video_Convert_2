@@ -1,7 +1,7 @@
 #!/bin/bash
 # set -x
 
-typeset streamMap baseName encodeOpts videoOpts codecOpts audioOpts vFrameRate fullName fileName directory extension 
+typeset streamMap encodeOpts videoOpts codecOpts audioOpts vFrameRate
 typeset -i j=0 noAudio=0
 
 # File settings
@@ -63,13 +63,15 @@ EOcmd
     -of flat "$inFile" 2>/dev/null | tr -d '"' >> "$probeFile"
 
   # Collect number of streams and type
-  stream=( $(grep 'codec_type' "$probeFile") )
+  #stream=( $(grep 'codec_type' "$probeFile") )
+  mapfile -t stream < <(grep 'codec_type' "$probeFile")
 
   # Process all streams in video file
   j=0 
   while (( j < ${#stream[*]} )); do
     # TODO Change to case select
-    if [[ $(grep -c 'video' <<< ${stream[$j]}) -eq 1 ]]; then
+    #if [[ $(grep -c 'video' <<< "${stream[$j]}") -eq 1 ]]; then
+    if grep -q 'video' <<< "${stream[$j]}"; then
       videoMap="0:${j}"
       traceIt $LINENO probeIt " info " "videoMap=$videoMap"
       hSize=$(grep "\.${j}\.width" "$probeFile" | awk -F'=' '{print $2}')
@@ -92,7 +94,7 @@ EOcmd
       vLanguage=$(grep "\.${j}\.language=" "$probeFile" | awk -F'=' '{print $2}')
       traceIt $LINENO probeIt " info " "vLanguage=$vLanguage"
     # Assumed first audio stream is good
-    elif [[ $(grep -c 'audio' <<< ${stream[$j]}) -eq 1 ]]; then
+    elif [[ $(grep -c 'audio' <<< "${stream[$j]}") -eq 1 ]]; then
       audioMap="0:${j}"
       traceIt $LINENO probeIt " info " "audioMap=$audioMap"
       sample=$(grep "\.${j}\.sample_rate=" "$probeFile" | awk -F'=' '{print $2}')
