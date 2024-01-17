@@ -1,12 +1,16 @@
 #!/bin/bash
+
+# Description: Convert video files to MP4 format using ffmpeg. (Experimental)
+
 # set -x
+set -e
 
 typeset streamMap encodeOpts videoOpts codecOpts audioOpts vFrameRate
 typeset -i j=0 noAudio=0
 
 # File settings
 inFile="$1"
-logFile=".${inFile%.*}.log"
+logFile="${inFile%.*}.log"
 traceLog="$logFile"
 
 umask 0022
