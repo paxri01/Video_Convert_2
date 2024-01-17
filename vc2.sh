@@ -10,11 +10,21 @@
 # ├── mtv
 # ├── restricted
 # ├── series                          <-- This is the search directory with subdirectories for each series.
-# │   ├── Agatha Christies Poirot 
-# │   ├── FantomWorks
-# │   ├── Reacher
-# │   ├── The Curse of Oak Island
-# │   └── Undercover Billionaire
+# │   └── Series 1
+# |       └── S04
+# │   └── Series 2
+# |       └── S08
+# │   └── Series 3
+# |       └── S02
+# │   └── Series 4
+# |       └── S01
+# │   └── Series 5
+# |       └── S07
+# │   └── Series 5
+# |       └── S01                    <-- This is where the series video files are located.
+# |       └── S02
+# |       └── S03
+# ├── other
 # ├── video
 
 # The output directory structure will be duplicated from the search directory structure.
@@ -254,10 +264,10 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     echo ""
     Text1="Abort detected, stopping now"
     # shellcheck disable=SC2059
-    printf "  ${C5}${Text1}${C0}"
+    printf "  ${CRED}${Text1}${CNORM}"
     printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
     echo -e "\b\b\c"
-    echo -e "[${C6}KILLED${C0}]"
+    echo -e "[${CPUR}KILLED${CNORM}]"
     tput cnorm
     exit 1
   }

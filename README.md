@@ -2,9 +2,12 @@
 
 This script will search for video files in various directories as specified by the command line arguments.
 The script builds an array of incoming files and then probes the file and will convert each to the specified
-format base on the command line arguments.
+format based on the command line arguments.
 
-The main goal of this is to re-encode various video files to play on ANY DLNA device without having to transcode it.  With the default settings in the script, any Smart TV should be able to decode the outputted videos.
+The main goal of this is to re-encode various video files to play on ANY device without having to transcode it.  With the default settings in the script, any Smart TV should be able to decode the outputted videos.  Works great with Plex mediaserver.
+
+Make sure to compare the input video with the output using `mediainfo`. You may be surprised by the results and typically the output video is better than the input... just saying.
+
 
 Expected incoming directory structure:
 
@@ -13,11 +16,13 @@ Expected incoming directory structure:
     ├── mtv
     ├── restricted
     ├── series                          <-- This is the search directory with subdirectories for each series.
-    │   ├── Agatha Christies Poirot 
-    │   ├── FantomWorks
-    │   ├── Reacher
-    │   ├── The Curse of Oak Island
-    │   └── Undercover Billionaire
+    │   ├── Series 1
+    │   ├── Series 2
+    │   ├── Series 3
+    │   ├── Series 4
+    │   └── Series 5
+    │       └── S01                     <-- Series episode files go here.
+    │       └── S02
     ├── video
 
 The output directory structure will be duplicated from the search directory structure.
@@ -78,20 +83,26 @@ These are some of the requirements for this script.
 
 You may change the default codecs, but if you do, you may also need to change the parameters passed to the new codecs.
 
+### Recommendations
+
+Link the .sh scripts to `/usr/local/bin` and ensure that it is in your $PATH.  The script is calling the helper scripts `cc_probe.sh` and `cc_norm.sh` without the `.sh` extension.
+
+    ln -s /<PATH_TO_THE_.sh_FILE> /usr/local/bin/<NAME_WITHOUT_.sh>
+
 
 ### Example of output:
 
-Names have been changed to protect the innocent.
+The names have been changed to protect the innocent.
 
     > vc2 -s
     
     Starting run of Video Converter 2
-      Collecting list of files to process.........................................................[  OK  ]
+      Collecting list of files to process....................................................[  OK  ]
     
     File 1 of 16
-      Processing: series/TV Show/S02/S02E07.Episode 07............................................[  OK  ]
-      Normalizing audio track.....................................................................[  OK  ]
-      Setting encode filters......................................................................[  OK  ]
+      Processing: series/TV Show/S02/S02E07.Episode 07.......................................[  OK  ]
+      Normalizing audio track................................................................[  OK  ]
+      Setting encode filters.................................................................[  OK  ]
                                            total time=01:27:46.69
     frame=126273 fps=236 q=27.0 Lsize= 1226065kB time=01:27:46.66 bitrate=1907.1kbits/s speed=9.83x    
     ---------------------------
@@ -100,9 +111,9 @@ Names have been changed to protect the innocent.
       Done
     
     File 2 of 16
-      Processing: series/TV Show/S02/S02E12.Episode 12............................................[  OK  ]
-      Normalizing audio track.....................................................................[  OK  ]
-      Setting encode filters......................................................................[  OK  ]
+      Processing: series/TV Show/S02/S02E12.Episode 12.......................................[  OK  ]
+      Normalizing audio track................................................................[  OK  ]
+      Setting encode filters.................................................................[  OK  ]
                                            total time=01:31:43.42
     frame=131950 fps=232 q=27.0 Lsize= 1282980kB time=01:31:43.38 bitrate=1909.8kbits/s speed=9.67x    
     ---------------------------
@@ -113,4 +124,5 @@ Names have been changed to protect the innocent.
 
   
 \- Cheers,
+
 Rick
