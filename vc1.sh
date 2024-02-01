@@ -4,9 +4,12 @@
 
 inFile=$1
 baseName=${inFile%.*}
+typeset -i vWidth
+typeset vMap aMap vFilter
 
 # Hint `ln -s ./cc_probe.sh /usr/local/bin/cc_probe` to make this work
 cc_probe "$inFile"
+# shellcheck disable=SC1091
 source .probe.rc
 
 vFilter="fps=fps=24000/1001"
@@ -24,8 +27,8 @@ cat << EOF
 EOF
 
 /usr/local/bin/ffmpeg -hide_banner -y -i "$inFile" \
-  $vMap -c:v libx264 -preset fast -crf 18 -vf "$vFilter" \
-  $aMap -c:a libfdk_aac -b:a 160k "$baseName"_recode.mp4
+  "$vMap" -c:v libx264 -preset fast -crf 18 -vf "$vFilter" \
+  "$aMap" -c:a libfdk_aac -b:a 160k "$baseName"_recode.mp4
 
 # vim: set syntax=bash:
 # vim: set filetype=sh:
