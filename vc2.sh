@@ -468,10 +468,10 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
       # Resize video based on video width (vWidth sourced from probeIt)
       # shellcheck disable=SC2154  # vWidth sourced from probeIt()
       if (( vWidth > 1280 )); then
-        vFilter+="scale=1280:-1,"
+        vFilter+="scale=1280:-2,"
         scale=$(echo "scale=6; (1280/$vWidth)" | bc)
       elif (( vWidth < 720  )); then
-        vFilter+="scale=720:-1,"
+        vFilter+="scale=720:-2,"
         scale=$(echo "scale=6; (720/$vWidth)" | bc)
       else
         scale=1
@@ -549,8 +549,15 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
   {
     inFile=$1
 
-    if [[ ! -d "${outDir[$l]}" ]]; then
+    if [[ ! -d "${outDir[$l]}" || ! -h "${outDir[$l]}" ]]; then
       sudo mkdir -p "${outDir[$l]}"
+      check=$?
+      if [[ $check -ne 0 ]]; then
+        logIt "ERROR: Could not create directory ${outDir[$l]}"
+        traceIt $LINENO encodeIt "ERROR!" "Could not create directory ${outDir[$l]}"
+        killWait 1 "Could not create directory ${outDir[$l]}"
+        exit $check
+      fi
       sudo chown $user:$group "${outDir[$l]}"
       sudo chmod 0775 "${outDir[$l]}"
     fi
