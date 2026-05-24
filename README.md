@@ -112,7 +112,7 @@ Outputs the `-filter:a loudnorm=...` string for use in the final encode pass.
 
 ## vc_rename.sh — Filename Normalizer
 
-Normalizes video filenames in the current directory: converts to lowercase, replaces spaces with dots, and strips known site-watermark suffixes (youporn, pornhub, redtube, beeg, etc.).
+Normalizes video filenames in the current directory: converts to lowercase, replaces spaces with dots, and strips known site-watermark suffixes.
 
     # Dry run — shows what would be renamed without making changes
     vc_rename.sh
