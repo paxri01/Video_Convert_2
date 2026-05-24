@@ -1,0 +1,19 @@
+  Method 1: NFO Files (Recommended for Manual Control)
+
+  Create a .nfo file next to your video file using one of these naming conventions:
+  - movie.nfo (generic)
+  - [video_filename].nfo (specific to that file)
+
+  Example NFO file format:
+  <?xml version="1.0" encoding="UTF-8"?>
+  <movie>
+      <title>My Movie</title>
+      <rating>8.5</rating>
+      <mpaa>PG-13</mpaa>
+      <plot>Movie description here...</plot>
+      <year>2024</year>
+      <genre>Action</genre>
+  </movie>
+
+  For TV shows, use tvshow.nfo or episode-specific files.
+

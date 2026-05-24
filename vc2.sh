@@ -10,17 +10,17 @@
 # ├── mtv
 # ├── restricted
 # ├── series                          <-- This is the search directory with subdirectories for each series.
-# │   └── Series 1
+# │   └── Series 1
 # |       └── S04
-# │   └── Series 2
+# │   └── Series 2
 # |       └── S08
-# │   └── Series 3
+# │   └── Series 3
 # |       └── S02
-# │   └── Series 4
+# │   └── Series 4
 # |       └── S01
-# │   └── Series 5
+# │   └── Series 5
 # |       └── S07
-# │   └── Series 5
+# │   └── Series 5
 # |       └── S01                    <-- This is where the series video files are located.
 # |       └── S02
 # |       └── S03
@@ -38,7 +38,6 @@
   baseDir='/data2/usenet'
   searchDir="$baseDir/renamed"
   workDir="$baseDir/tmp"
-  inFiles="$workDir/inFiles.lst"
   logDir='/var/log/convert'
   logFile="$logDir/ccvc.log"
   traceLog="$logDir/ccvc_trace_$(date +%F).log"
@@ -59,49 +58,142 @@
     cat << EOM
   NAME
       $0 - video converter
-  
+
   SYNOPSIS
       $0 [OPTION]
-  
+
   DESCRIPTION
       Re-encodes video files to sane/portable parameters.
-  
+      NVIDIA GPU is used automatically when detected; software fallback otherwise.
+
       -h, --help
           This documentation.
-  
+
       --hq
           Will re-encode video with high quality settings.
-  
+
       --lq
           Will re-encode video with low quality settings.
-  
+
+      --no-gpu
+          Disable hardware acceleration even if an NVIDIA GPU is detected.
+
       -m, --movie
           Will look for feature length movies in configured directory.
-  
+
       --mv
           Will look for music videos in configured directory.
-  
+
       -o, --other
           Will look for other type video files in configured directory.
-  
+
       -s, --series
           Will look for series shows in configured directory.
-          
+
       -v, --video
           Will look for video files in configured directory.
-  
-      -x. --restrict
+
+      -x, --restrict
           Will look for restricted videos in configured directory.
-  
+
   AUTHOR
       Written by Richard L. Paxton.
-  
-  EXAMPLE
+
+  EXAMPLES
       The following would search for movie files and re-encode them at high quality.
       $0 -m --hq
-  
+
+      The following would search for series files with hardware acceleration disabled.
+      $0 -s --no-gpu
+
 EOM
     exit 1
+  }
+
+# Configuration function to set encoding parameters
+  setEncodeParams() {
+    local type="$1"
+    case "$type" in
+      "movie")
+        aRemix='true'
+        inDir="$searchDir/features"
+        sample_range='-t 15:00'
+        target_FPS='24000/1001'
+        target_QF='.1'
+        target_aBitrate='160k'
+        target_sampleRate='48k'
+        vPreset='medium'
+        vResize='true'
+        vTune='film'
+        ;;
+      "mv")
+        aRemix='true'
+        audioChannels='2'
+        inDir="$searchDir/mtv"
+        target_FPS='30'
+        target_QF='.2'
+        target_aBitrate='192k'
+        target_sampleRate='48k'
+        vPreset='slow'
+        vResize='true'
+        vTune='film'
+        ;;
+      "other")
+        aRemix='true'
+        inDir="$searchDir/other"
+        target_FPS='24000/1001'
+        target_QF='.1'
+        target_aBitrate='160k'
+        target_sampleRate='48k'
+        vPreset='slow'
+        vResize='true'
+        vTune='film'
+        ;;
+      "series")
+        aRemix='true'
+        audioChannels='2'
+        inDir="$searchDir/series"
+        target_FPS='24000/1001'
+        target_QF='.08'
+        target_aBitrate='128k'
+        target_sampleRate='48k'
+        vPreset='fast'
+        vResize='true'
+        vTune='film'
+        ;;
+      "video")
+        aRemix='true'
+        inDir="$searchDir/video"
+        target_FPS='30'
+        target_QF='.2'
+        target_aBitrate='192k'
+        target_sampleRate='48k'
+        vPreset='slow'
+        vResize='false'
+        ;;
+      "restricted")
+        aRemix='true'
+        audioChannels='2'
+        inDir="$searchDir/restricted"
+        target_FPS='25'
+        target_QF='.08'
+        target_aBitrate='92k'
+        vPreset='fast'
+        vResize='true'
+        vTune='film'
+        ;;
+      "zfeatures")
+        aRemix='true'
+        audioChannels='2'
+        inDir="$searchDir/zFeatures"
+        target_FPS='25'
+        target_QF='.08'
+        target_aBitrate='92k'
+        vPreset='fast'
+        vResize='true'
+        vTune='film'
+        ;;
+    esac
   }
 
 # Process command line arguments
@@ -122,85 +214,41 @@ EOM
         audioChannels='2'
         shift
         ;;
+      --no-gpu) #Disable hardware acceleration
+        GPU_AVAILABLE=false
+        shift
+        ;;
       -m | --movie) #Process movies
-        aRemix='true'
-        #audioChannels='2'
-        inDir="$searchDir/features"
-        sample_range='-t 15:00'  # 15 minute sample range from beginning
-        target_FPS='24000/1001'
-        target_QF='.1'
-        target_aBitrate='160k'
-        target_sampleRate='48k'
-        vPreset='medium'
-        vResize='true'
-        vTune='film'
+        setEncodeParams "movie"
         shift
         ;;
       --mv) #music video files
-        aRemix='true'
-        audioChannels='2'
-        inDir="$searchDir/mtv"
-        target_FPS='30'
-        target_QF='.2'
-        target_aBitrate='192k'
-        target_sampleRate='48k'
-        vPreset='slow'
-        vResize='true'
-        vTune='film'
+        setEncodeParams "mv"
         shift
         ;;
       -o | --other) #Process other videos
-        aRemix='true'
-        #audioChannels='2'
-        inDir="$searchDir/other"
-        target_FPS='24000/1001'
-        target_QF='.1'
-        target_aBitrate='160k'
-        target_sampleRate='48k'
-        vPreset='slow'
-        vResize='true'
-        vTune='film'
+        setEncodeParams "other"
         shift
         ;;
       -s | --series) #tv series encodes
-        aRemix='true'
-        audioChannels='2'
-        inDir="$searchDir/series"
-        target_FPS='24000/1001'
-        target_QF='.08'
-        target_aBitrate='128k'
-        target_sampleRate='48k'
-        vPreset='fast'
-        vResize='true'
-        vTune='film'
+        setEncodeParams "series"
         shift
         ;;
       -v | --video) #video files
-        aRemix='true'
-        #audioChannels='2'
-        inDir="$searchDir/video"
-        target_FPS='30'
-        target_QF='.2'
-        target_aBitrate='192k'
-        target_sampleRate='48k'
-        vPreset='slow'
-        vResize='false'
+        setEncodeParams "video"
         shift
         ;;
       -x | --restricted) #restricted videos
-        aRemix='true'
-        audioChannels='2'
-        inDir="$searchDir/restricted"
-        target_FPS='25'
-        target_QF='.08'
-        target_aBitrate='92k'
-        vPreset='fast'
-        vResize='true'
-        vTune='film'
+        setEncodeParams "restricted"
         shift
         ;;
+      -z ) #restricted plex videos
+        setEncodeParams "zfeatures"
+        shift
+        ;;
+
       *)  #Unknown option
-        echo -e "${CRED}ERROR: 10 - Unknown option '$1'${CNORM}"
+        echo -e "${C1}ERROR: 10 - Unknown option '$1'${C0}"
         usage
         ;;
     esac
@@ -236,18 +284,37 @@ EOM
   trap 'deadJim' 1 2 3 15
 
 # Add some colors
-  CGRN='\033[38;5;040m'  # Green
-  CGRY='\033[38;5;243m'  # Grey
-  CWHT='\033[38;5;254m'  # White
-  CYEL='\033[38;5;184m'  # Yellow
-  CRED='\033[38;5;160m'  # Red
-  CPUR='\033[38;5;165m'  # Purple
-  CBLU='\033[38;5;063m'  # Blue
-  #CDGR='\033[38;5;234m'  # Dark
-  CNORM='\033[0;00m'      # Reset
+  C0='\033[0;00m'      # Reset
+  C1='\033[38;5;160m'  # ReD
+  C2='\033[38;5;040m'  # Green
+  C3='\033[38;5;184m'  # Yellow
+  C4='\033[38;5;063m'  # Blue
+  C5='\033[38;5;165m'  # Purple
+  #C6='\033[38;5;234m'  # Dark
+  C7='\033[38;5;254m'  # White
+  C8='\033[38;5;243m'  # Grey
+
+# Hardware acceleration detection (after colors so status message is colored)
+  if [[ ${GPU_AVAILABLE+x} != x ]]; then
+    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+      GPU_AVAILABLE=true
+    else
+      GPU_AVAILABLE=false
+    fi
+  fi
+
+  if [[ $GPU_AVAILABLE == true ]]; then
+    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
+      echo -e "${C3}WARNING: NVIDIA GPU detected but h264_nvenc not available, falling back to software encoding${C0}"
+      GPU_AVAILABLE=false
+    else
+      video_codec='h264_nvenc'
+    fi
+  fi
 
 # Define Global variables
-typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName extension metaFile
+declare -a fullName fileName extension baseName baseDir outDir
+declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
 
 ## Defined Functions
   logIt ()
@@ -255,7 +322,16 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     echo "$(date '+%b %d %H:%M:%S') $1" >> "$logFile"
     return 0
   }
-  
+
+  errorExit ()
+  {
+    local msg="$1"
+    local code="${2:-1}"
+    echo -e "${C1}ERROR: $msg${C0}" >&2
+    logIt "ERROR: $msg"
+    exit "$code"
+  }
+
   deadJim ()
   {
     # Display message and reset cursor on trap
@@ -264,10 +340,10 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     echo ""
     Text1="Abort detected, stopping now"
     # shellcheck disable=SC2059
-    printf "  ${CRED}${Text1}${CNORM}"
+    printf "  ${C1}${Text1}${C0}"
     printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
     echo -e "\b\b\c"
-    echo -e "[${CPUR}KILLED${CNORM}]"
+    echo -e "[${C5}KILLED${C0}]"
     tput cnorm
     exit 1
   }
@@ -278,29 +354,29 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     echo "$(date '+%b %d %H:%M:%S') [$(printf "%.3d" "$1")] $2: [$3] $4" >> "$traceLog"
     return 0
   }
-  
+
   displayIt ()
   {
-  
+
     Text1="$1"
     Text2="$2"
-  
+
     if (( $# > 1 )); then
-      printf "  %b" "${CGRY}${Text1}${CBLU}${Text2}${CNORM}"
+      printf "  %b" "${C8}${Text1}${C4}${Text2}${C0}"
       printf '%*.*s' 0 $((padlength - ${#Text1} - ${#Text2} - 6 )) "$pad"
     else
-      printf "  %b" "${CGRY}${Text1}${CNORM}"
+      printf "  %b" "${C8}${Text1}${C0}"
       printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
     fi
-  
+
     rotate &
     rPID=$!
     return 0
   }
-  
+
   rotate ()
   {
-  
+
     while :
     do
       tput civis
@@ -323,7 +399,7 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
       esac
     done
   }
-  
+
   killWait ()
   {
     FLAG=$1
@@ -331,15 +407,15 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     wait "$rPID" 2>/dev/null
     echo -e "\b\b\c"
     tput cnorm
-  
+
     case $FLAG in
-      "0") echo -e "[${CGRN}  OK  ${CNORM}]"
+      "0") echo -e "[${C2}  OK  ${C0}]"
         ;;
-      "1") echo -e "[${CRED}ERROR!${CNORM}]"
+      "1") echo -e "[${C1}ERROR!${C0}]"
         ;;
-      "2") echo -e "[${CYEL} WARN ${CNORM}]"
+      "2") echo -e "[${C3} WARN ${C0}]"
         ;;
-      *) echo -e "[${CPUR}UNKWN!${CNORM}]"
+      *) echo -e "[${C5}UNKWN!${C0}]"
         ;;
     esac
     return 0
@@ -347,25 +423,24 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
 
   getFiles ()
   {
-    ## Find following file types within inDir.
+    ## Find following file types within inDir and process directly
     ## Filter any with .zzz extension.
-    find "$inDir" -type f -iregex '.*.\(mgp\|mp4\|m4v\|wmv\|avi\|mpg\|mov\|mkv\|flv\|webm\|ts\|f4v\)' \
-      -fprintf "$inFiles" '%h/%f\n'
-    sed -i '/\.zzz/d' "$inFiles"
-  
-    # The following if statements detect where the file is located and sets fType.
-    i=0
-    while read -r LINE; do
+    local i=0 fileNo tempFile
+    mapfile -t file_list < <(find "$inDir" -type f -iregex '.*.\(avi\|mgp\|mp4\|m4v\|wmv\|avi\|mpg\|mov\|mkv\|flv\|webm\|ts\|f4v\)' -not -path '*.zzz*' -print)
+
+    # Process each file and populate arrays
+    for LINE in "${file_list[@]}"; do
       fileNo=$((i+1))
       fullName[i]="$LINE"
-      fileName[i]=$(basename "${fullName[$i]}")
+      fileName[i]="${fullName[$i]##*/}"
       # Strip search directory from base directory.
-      baseDir[i]=$(dirname "${fullName[$i]}" | sed -e "s@$searchDir/@@")
+      local fullDir="${fullName[$i]%/*}"
+      baseDir[i]="${fullDir#"$searchDir/"}"
       tempFile="${fileName[$i]}"
       extension[i]="${tempFile##*.}"
       baseName[i]="${tempFile%.*}"
       outDir[i]="$videoDir/${baseDir[$i]}"
-  
+
       traceIt $LINENO getFiles " info " "== Processing file number: [$(printf '%.3d' $fileNo)] =="
       traceIt $LINENO getFiles " info " " fullName: ${fullName[$i]}"
       traceIt $LINENO getFiles " info " "directory: ${baseDir[$i]}"
@@ -374,62 +449,85 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
       traceIt $LINENO getFiles " info " "extension: ${extension[$i]}"
       traceIt $LINENO getFiles " info " "   outDir: ${outDir[$i]}"
       ((i++))
-    done < $inFiles
-  
-    rm $inFiles
+    done
     return 0
   }
 
   getMeta ()
   {
-    # Metadata 
+    # Metadata
     inFile=$1
-    fTitle=$(awk -F'[()]' '{print $1}' <<< "$inFile")
-    fDate=$(awk -F'[()]' '{ print $2 }' <<< "$inFile" | awk '{ print $1 }')
+    # Extract title and date using bash parameter expansion
+    local pattern='^(.+[[:space:]])\(([^)]+)\)'
+    if [[ "$inFile" =~ $pattern ]]; then
+      fTitle="${BASH_REMATCH[1]}"
+      fDate="${BASH_REMATCH[2]%% *}"  # Get first word of date
+    else
+      fTitle="$inFile"
+      fDate=""
+    fi
     fDate=${fDate:-$(date +%F)}
     metaFile="${workDir}/${inFile}.meta"
-    unset meta_title meta_data meta_synopsis 
-  
+    unset meta_title meta_data meta_synopsis
+
     meta_title=${meta_title:-$fTitle}
     meta_date=${meta_date:-$fDate}
     meta_synopsis=${meta_synopsis:-'No info'}
     meta_composer="the Gh0st"
     meta_comment="$ffmpeg_string"
-  
+
     echo ";FFMETADATA1" > "$metaFile"
     metaData[0]="title=$meta_title"
     metaData[1]="date=$meta_date"
     metaData[2]="synopsis=$meta_synopsis"
     metaData[3]="comment=$meta_comment"
     metaData[4]="composer=$meta_composer"
-  
+
     j=0
     while (( j < ${#metaData[*]} ))
     do
       echo "${metaData[$j]}" >> "$metaFile"
       j=$((j+1))
     done
-  
+
     return 0
   }
 
   normalizeIt ()
   {
     inFile=$1
-  
+
+    if ! command -v cc_norm >/dev/null 2>&1; then
+      errorExit "cc_norm not found in \$PATH"
+    fi
+
     normalize=$(cc_norm "$inFile" $ffmpeg_bin "$sample_range")
+    STATUS=$?
+    if (( STATUS > 0 )); then
+      echo "$normalize"
+      normalize=''
+    fi
     traceIt $LINENO normalIt " info " "normalize=$normalize"
-  
+
     return 0
   }
 
   probeIt ()
   {
     inFile="$1"
-  
+
+    if ! command -v cc_probe >/dev/null 2>&1; then
+      errorExit "cc_probe not found in \$PATH"
+    fi
+
     cc_probe "$inFile"
     # shellcheck disable=SC1091
-    source .probe.rc
+
+    if [[ -f .probe.rc ]]; then
+      source .probe.rc
+    else
+      errorExit "cc_probe failed to generate .probe.rc file" 2
+    fi
     # shellcheck disable=SC2154
     { echo "> fName=$fName"
     echo "> fSize=$fSize"
@@ -454,33 +552,32 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     return 0
   }
 
-  setOpts ()
+  buildVideoFilter ()
   {
-    ## Build video filter string
     # shellcheck disable=SC2154 # vMap sourced from probeIt()
     vFilter="$vMap "
     vFilter+='-vf '
-  
+
     # Check if video needs to be resized.
     if [[ $vResize != 'true' ]]; then
-      traceIt $LINENO setOpts " info " "Skipping video resize due to override."
+      traceIt $LINENO buildVideoFilter " info " "Skipping video resize due to override."
     else
       # Resize video based on video width (vWidth sourced from probeIt)
       # shellcheck disable=SC2154  # vWidth sourced from probeIt()
       if (( vWidth > 1280 )); then
-        vFilter+="scale=1280:-1,"
-        scale=$(echo "scale=6; (1280/$vWidth)" | bc)
+        vFilter+="scale=1280:-2,"
+        scale=$(awk "BEGIN {printf \"%.6f\", 1280/$vWidth}")
       elif (( vWidth < 720  )); then
-        vFilter+="scale=720:-1,"
-        scale=$(echo "scale=6; (720/$vWidth)" | bc)
+        vFilter+="scale=720:-2,"
+        scale=$(awk "BEGIN {printf \"%.6f\", 720/$vWidth}")
       else
         scale=1
       fi
     fi
-  
+
     # Check measured video FPS to targetFPS.
     #shellcheck disable=SC2154  # vFPS sourced from probeIt()
-    if [[ $(echo "$vFPS >= $target_FPS" |bc -l) ]]; then
+    if [[ $(awk "BEGIN {print ($vFPS >= $target_FPS)}") == "1" ]]; then
       FPS=$target_FPS
     else
       FPS=$vFPS
@@ -490,32 +587,48 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     if [[ -e $inDir/${baseName[$l]}.png ]]; then
       vFilter+=",removelogo=\"$inDir/${baseName[$l]}.png\""
     fi
-    traceIt $LINENO setOpts " info " "vFilter: $vFilter"
-  
-  
-    ##  Build video codec string
+    traceIt $LINENO buildVideoFilter " info " "vFilter: $vFilter"
+  }
+
+  buildVideoOpts ()
+  {
     vOpts="-c:v $video_codec "
 
     # Calculate video bitrate
     #shellcheck disable=SC2154  # vHeight sourced from probeIt()
-    _vSize=$(printf "%.0f" "$(echo "scale=2; $vHeight*$scale" | bc)")
-    _hSize=$(printf "%.0f" "$(echo "scale=2; $vWidth*$scale" | bc)")
-    target_vBitrate=$(printf "%.0f" "$(echo "scale=2; ($target_QF*$_hSize*$_vSize*$FPS)/1000" | bc)")
-    traceIt $LINENO setOpts " info " "target_vBitrate=$target_vBitrate"
-  
+    local _vSize _hSize
+    _vSize=$(awk "BEGIN {printf \"%.0f\", $vHeight*$scale}")
+    _hSize=$(awk "BEGIN {printf \"%.0f\", $vWidth*$scale}")
+    target_vBitrate=$(awk "BEGIN {printf \"%.0f\", ($target_QF*$_hSize*$_vSize*$FPS)/1000}")
+    traceIt $LINENO buildVideoOpts " info " "target_vBitrate=$target_vBitrate"
+
     vOpts+="-b:v ${target_vBitrate}k "
-    vOpts+="-preset $vPreset "
-    vOpts+="-tune $vTune"
-    traceIt $LINENO setOpts " info " "vOpts: $vOpts"
-  
-    ## Build audio filter string
+
+    if [[ $video_codec == *"nvenc"* ]]; then
+      # NVENC encoder options
+      vOpts+="-preset $vPreset "
+      vOpts+="-rc vbr "
+      vOpts+="-cq 23 "
+      vOpts+="-bufsize $((target_vBitrate * 2))k "
+      vOpts+="-maxrate $((target_vBitrate + target_vBitrate/2))k "
+      vOpts+="-multipass 2"
+    else
+      # CPU encoder options
+      vOpts+="-preset $vPreset "
+      vOpts+="-tune $vTune"
+    fi
+    traceIt $LINENO buildVideoOpts " info " "vOpts: $vOpts"
+  }
+
+  buildAudioOpts ()
+  {
     #shellcheck disable=SC2154  # aMap sourced from probeIt()
     if [[ -n $aMap ]]; then
       aFilter="$aMap "
       if [[ -n $normalize ]]; then
         aFilter+="$normalize"
       fi
-    
+
       # Build audio codec string
       aOpts="-c:a $audio_codec "
       aOpts+="-b:a $target_aBitrate "
@@ -529,10 +642,11 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     else
       aOpts='-an'
     fi
-    traceIt $LINENO setOpts " info " "aOpts: $aOpts"
-  
-  
-    ## Build subtitle codec string
+    traceIt $LINENO buildAudioOpts " info " "aOpts: $aOpts"
+  }
+
+  buildSubtitleOpts ()
+  {
     if [[ -n $sMap ]]; then
       sOpts="-c:s mov_text "
       sOpts+="-metadata:s:s:0 "
@@ -541,7 +655,14 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     else
       sOpts="-sn"
     fi
-  
+  }
+
+  setOpts ()
+  {
+    buildVideoFilter
+    buildVideoOpts
+    buildAudioOpts
+    buildSubtitleOpts
     return 0
   }
 
@@ -549,10 +670,17 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
   {
     inFile=$1
 
-    if [[ ! -d "${outDir[$l]}" ]]; then
-      sudo mkdir -p "${outDir[$l]}"
-      sudo chown $user:$group "${outDir[$l]}"
-      sudo chmod 0775 "${outDir[$l]}"
+    if [[ ! -d "${outDir[$l]}" && ! -h "${outDir[$l]}" ]]; then
+      mkdir -p "${outDir[$l]}"
+      check=$?
+      if [[ $check -ne 0 ]]; then
+        logIt "ERROR: Could not create directory ${outDir[$l]}"
+        traceIt $LINENO encodeIt "ERROR!" "Could not create directory ${outDir[$l]}"
+        killWait 1 "Could not create directory ${outDir[$l]}"
+        exit $check
+      fi
+      chown $user:$group "${outDir[$l]}" 2>/dev/null
+      chmod 0775 "${outDir[$l]}" 2>/dev/null
     fi
     if [[ $hq != 1 ]]; then
       outFile="${outDir[$l]}/${baseName[$l]}.mp4"
@@ -561,7 +689,6 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     fi
 
     ffmpeg_string="${ffmpeg_bin} "
-    #ffmpeg_string="ffmpeg "
     ffmpeg_string+="-hide_banner -y "
     ffmpeg_string+="-loglevel quiet -stats "
     ffmpeg_string+="-i \"$inFile\" "
@@ -573,35 +700,43 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
     ffmpeg_string+="$aFilter "
     ffmpeg_string+="$sOpts "
     tempOut="$tempDir/converting.mp4"
-  
-    #echo -e "\n${CDGR}> ${ffmpeg_string//-loglevel quiet -stats /} $tempOut${CNORM}\n"
+
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
-    echo -e "                                     total time=${CYEL}$duration${CNORM}"
+    if [[ $GPU_AVAILABLE == true ]]; then
+      echo -e "                    ${C2}Hardware acceleration: $video_codec${C0} | total time=${C3}$duration${C0}"
+    else
+      echo -e "                                      total time=${C3}$duration${C0}"
+    fi
     bash -c "$ffmpeg_string $tempOut"
     STATUS=$?
 
     if (( STATUS > 0 )); then
       logIt "Re-encoding of $inFile failed!"
       traceIt $LINENO encodeIt "ERROR!" "STATUS=$STATUS, ffmpeg encode failed."
-      echo -e "> ${CRED}ERROR: Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${CNORM}\n"
+      echo -e "> ${C1}ERROR: Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
     else
-      sudo mv -f "$tempOut" "$outFile"
-      origSize=$(du -b "$inFile" | cut -f1)
-      newSize=$(du -b "$outFile" | cut -f1)
-      diff=$(echo "scale=4; (($newSize - $origSize)/$origSize)*100" | bc | sed -r 's/0{2}$//')
-      origHuman="$(du -h "$inFile" | cut -f1)"
-      newHuman="$(du -h "$outFile" | cut -f1)"
-      if (( $(echo "$diff < 0" | bc) )); then
+      mv -f "$tempOut" "$outFile"
+      # Get file sizes efficiently using stat
+      origSize=$(stat -c%s "$inFile")
+      newSize=$(stat -c%s "$outFile")
+
+      # Convert to human readable format using bash
+      origHuman=$(numfmt --to=iec-i --suffix=B "$origSize" 2>/dev/null || echo "${origSize}B")
+      newHuman=$(numfmt --to=iec-i --suffix=B "$newSize" 2>/dev/null || echo "${newSize}B")
+      diff=$(awk "BEGIN {printf \"%.2f\", (($newSize - $origSize)/$origSize)*100}")
+      if (( newSize < origSize )); then
+        # File decreased - show positive percentage
+        decrease=$(awk "BEGIN {printf \"%.2f\", (($origSize - $newSize)/$origSize)*100}")
         {
           echo "---------------------------"
-          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${CGRN}File decreased by $(echo "- $diff" | bc)%${CNORM}"
+          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C2}File decreased by ${decrease}%${C0}"
           echo "---------------------------"
         } | tee -a "$logFile"
       else
         {
           echo "---------------------------"
-          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${CRED}File increased by ${diff}%${CNORM}"
+          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C1}File increased by ${diff}%${C0}"
           echo "---------------------------"
         } | tee -a "$logFile"
       fi
@@ -612,13 +747,13 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
 
       {
         mkdir -p "$doneDir/${baseDir[$l]}"
-        sudo chgrp -R admins "$doneDir/${baseDir[$l]}"
+        chgrp -R admins "$doneDir/${baseDir[$l]}" 2>/dev/null
         mv "${fullName[$l]}" "$doneDir/${baseDir[$l]}/"
       } >> "$traceLog" 2>&1
 
       logIt "outFile = $outFile"
-      sudo chown $user:$group "$outFile"
-      sudo chmod 0664 "$outFile"
+      chown $user:$group "$outFile" 2>/dev/null
+      chmod 0664 "$outFile" 2>/dev/null
     fi
 
     return $STATUS
@@ -629,7 +764,12 @@ typeset baseName outFile vOpts vFilter aOpts aFilter sOpts fullName fileName ext
 
 ## MAIN
 traceIt $LINENO " MAIN  " " info " "*** START OF NEW RUN ***"
-echo -e "${CWHT}\nStarting run of ${CPUR}Video Converter 2${CNORM}"
+echo -e "${C7}\nStarting run of ${C5}Video Converter 2${C0}"
+if [[ $GPU_AVAILABLE == true ]]; then
+  echo -e "  ${C2}Hardware acceleration enabled${C0} (${video_codec})"
+else
+  echo -e "  ${C8}Software encoding${C0} (${video_codec})"
+fi
 umask 002
 
 displayIt "Collecting list of files to process"
@@ -647,17 +787,16 @@ while (( l < ${#fullName[@]})) && (( l < 50 )); do
   logIt "inFile=${fullName[$l]}"
 
   echo -e "\nFile $((l+1)) of ${#fullName[*]}"
-  displayIt "Processing: " "${baseDir[$l]}/${baseName[$l]}" 
-  sleep 1
+  displayIt "Processing: " "${baseDir[$l]}/${baseName[$l]}"
   probeIt "${fullName[$l]}"
   killWait $?
-  
+
   displayIt "Normalizing audio track"
   normalizeIt "${fullName[$l]}"
   killWait $?
 
   displayIt "Setting encode filters"
-  setOpts 
+  setOpts
   killWait $?
 
   getMeta "${baseName[$l]}"
@@ -669,6 +808,6 @@ while (( l < ${#fullName[@]})) && (( l < 50 )); do
   logIt "^----------------------------------------------------------------^"
   traceIt $LINENO " MAIN  " " info " "END OF LOOP: $((l+1))"
   echo "" >> "$traceLog"
-  echo -e "  ${CGRN}Done${CNORM}"
+  echo -e "  ${C2}Done${C0}"
   ((l++))
 done

@@ -38,6 +38,9 @@ measured_offset=$(jq -r .target_offset < "$outFile")
 if [[ -z "$measured_i" || -z "$measured_tp" || -z "$measured_lra" || -z "$measured_thresh" || -z "$measured_offset" ]]; then
   echo "ERROR: Could not parse loudnorm output."
   exit 1
+elif [[ "$measured_i" == 'inf' || "$measured_tp" == 'inf' || "$measured_lra" == 'inf' || "$measured_thresh" == 'inf' || "$measured_offset" == 'inf' ]]; then
+  echo "WARNING: No measured audio found."
+  exit 1
 fi
 
 loudnorm_string+="-filter:a loudnorm="
