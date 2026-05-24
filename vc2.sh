@@ -10,17 +10,17 @@
 # ├── mtv
 # ├── restricted
 # ├── series                          <-- This is the search directory with subdirectories for each series.
-# │   └── Series 1
+# │   └── Series 1
 # |       └── S04
-# │   └── Series 2
+# │   └── Series 2
 # |       └── S08
-# │   └── Series 3
+# │   └── Series 3
 # |       └── S02
-# │   └── Series 4
+# │   └── Series 4
 # |       └── S01
-# │   └── Series 5
+# │   └── Series 5
 # |       └── S07
-# │   └── Series 5
+# │   └── Series 5
 # |       └── S01                    <-- This is where the series video files are located.
 # |       └── S02
 # |       └── S03
@@ -50,7 +50,6 @@
   # Default video parameters
   audio_codec='libfdk_aac'
   video_codec='libx264'
-  cuda='false'
   hq='false'
   lq='false'
 
@@ -59,53 +58,54 @@
     cat << EOM
   NAME
       $0 - video converter
-  
+
   SYNOPSIS
       $0 [OPTION]
-  
+
   DESCRIPTION
       Re-encodes video files to sane/portable parameters.
-  
+      NVIDIA GPU is used automatically when detected; software fallback otherwise.
+
       -h, --help
           This documentation.
-  
+
       --hq
           Will re-encode video with high quality settings.
-  
+
       --lq
           Will re-encode video with low quality settings.
-  
-      --cuda
-          Will use NVIDIA CUDA hardware acceleration for encoding.
-  
+
+      --no-gpu
+          Disable hardware acceleration even if an NVIDIA GPU is detected.
+
       -m, --movie
           Will look for feature length movies in configured directory.
-  
+
       --mv
           Will look for music videos in configured directory.
-  
+
       -o, --other
           Will look for other type video files in configured directory.
-  
+
       -s, --series
           Will look for series shows in configured directory.
-          
+
       -v, --video
           Will look for video files in configured directory.
-  
-      -x. --restrict
+
+      -x, --restrict
           Will look for restricted videos in configured directory.
-  
+
   AUTHOR
       Written by Richard L. Paxton.
-  
+
   EXAMPLES
       The following would search for movie files and re-encode them at high quality.
       $0 -m --hq
-  
-      The following would search for series files and re-encode them using CUDA.
-      $0 -s --cuda
-  
+
+      The following would search for series files with hardware acceleration disabled.
+      $0 -s --no-gpu
+
 EOM
     exit 1
   }
@@ -214,8 +214,8 @@ EOM
         audioChannels='2'
         shift
         ;;
-      --cuda) #Enable CUDA hardware acceleration
-        cuda='true'
+      --no-gpu) #Disable hardware acceleration
+        GPU_AVAILABLE=false
         shift
         ;;
       -m | --movie) #Process movies
@@ -254,16 +254,6 @@ EOM
     esac
   done
 
-
-# Set CUDA encoding if enabled
-  if [[ $cuda == 'true' ]]; then
-    # Check if CUDA encoders are available
-    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
-      errorExit "CUDA hardware encoding not available. Please check NVIDIA drivers and GPU." 11
-    fi
-    video_codec='h264_nvenc'
-    echo -e "${C2}CUDA hardware acceleration enabled${C0}"
-  fi
 
 # Set video overrides if passed
   if [[ $hq == 'true' ]]; then
@@ -304,6 +294,24 @@ EOM
   C7='\033[38;5;254m'  # White
   C8='\033[38;5;243m'  # Grey
 
+# Hardware acceleration detection (after colors so status message is colored)
+  if [[ ${GPU_AVAILABLE+x} != x ]]; then
+    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+      GPU_AVAILABLE=true
+    else
+      GPU_AVAILABLE=false
+    fi
+  fi
+
+  if [[ $GPU_AVAILABLE == true ]]; then
+    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
+      echo -e "${C3}WARNING: NVIDIA GPU detected but h264_nvenc not available, falling back to software encoding${C0}"
+      GPU_AVAILABLE=false
+    else
+      video_codec='h264_nvenc'
+    fi
+  fi
+
 # Define Global variables
 declare -a fullName fileName extension baseName baseDir outDir
 declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
@@ -323,7 +331,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     logIt "ERROR: $msg"
     exit "$code"
   }
-  
+
   deadJim ()
   {
     # Display message and reset cursor on trap
@@ -346,13 +354,13 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     echo "$(date '+%b %d %H:%M:%S') [$(printf "%.3d" "$1")] $2: [$3] $4" >> "$traceLog"
     return 0
   }
-  
+
   displayIt ()
   {
-  
+
     Text1="$1"
     Text2="$2"
-  
+
     if (( $# > 1 )); then
       printf "  %b" "${C8}${Text1}${C4}${Text2}${C0}"
       printf '%*.*s' 0 $((padlength - ${#Text1} - ${#Text2} - 6 )) "$pad"
@@ -360,15 +368,15 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       printf "  %b" "${C8}${Text1}${C0}"
       printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
     fi
-  
+
     rotate &
     rPID=$!
     return 0
   }
-  
+
   rotate ()
   {
-  
+
     while :
     do
       tput civis
@@ -391,7 +399,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       esac
     done
   }
-  
+
   killWait ()
   {
     FLAG=$1
@@ -399,7 +407,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     wait "$rPID" 2>/dev/null
     echo -e "\b\b\c"
     tput cnorm
-  
+
     case $FLAG in
       "0") echo -e "[${C2}  OK  ${C0}]"
         ;;
@@ -419,7 +427,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     ## Filter any with .zzz extension.
     local i=0 fileNo tempFile
     mapfile -t file_list < <(find "$inDir" -type f -iregex '.*.\(avi\|mgp\|mp4\|m4v\|wmv\|avi\|mpg\|mov\|mkv\|flv\|webm\|ts\|f4v\)' -not -path '*.zzz*' -print)
-  
+
     # Process each file and populate arrays
     for LINE in "${file_list[@]}"; do
       fileNo=$((i+1))
@@ -432,7 +440,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       extension[i]="${tempFile##*.}"
       baseName[i]="${tempFile%.*}"
       outDir[i]="$videoDir/${baseDir[$i]}"
-  
+
       traceIt $LINENO getFiles " info " "== Processing file number: [$(printf '%.3d' $fileNo)] =="
       traceIt $LINENO getFiles " info " " fullName: ${fullName[$i]}"
       traceIt $LINENO getFiles " info " "directory: ${baseDir[$i]}"
@@ -447,7 +455,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
 
   getMeta ()
   {
-    # Metadata 
+    # Metadata
     inFile=$1
     # Extract title and date using bash parameter expansion
     local pattern='^(.+[[:space:]])\(([^)]+)\)'
@@ -460,35 +468,35 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     fi
     fDate=${fDate:-$(date +%F)}
     metaFile="${workDir}/${inFile}.meta"
-    unset meta_title meta_data meta_synopsis 
-  
+    unset meta_title meta_data meta_synopsis
+
     meta_title=${meta_title:-$fTitle}
     meta_date=${meta_date:-$fDate}
     meta_synopsis=${meta_synopsis:-'No info'}
     meta_composer="the Gh0st"
     meta_comment="$ffmpeg_string"
-  
+
     echo ";FFMETADATA1" > "$metaFile"
     metaData[0]="title=$meta_title"
     metaData[1]="date=$meta_date"
     metaData[2]="synopsis=$meta_synopsis"
     metaData[3]="comment=$meta_comment"
     metaData[4]="composer=$meta_composer"
-  
+
     j=0
     while (( j < ${#metaData[*]} ))
     do
       echo "${metaData[$j]}" >> "$metaFile"
       j=$((j+1))
     done
-  
+
     return 0
   }
 
   normalizeIt ()
   {
     inFile=$1
-  
+
     if ! command -v cc_norm >/dev/null 2>&1; then
       errorExit "cc_norm not found in \$PATH"
     fi
@@ -500,7 +508,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       normalize=''
     fi
     traceIt $LINENO normalIt " info " "normalize=$normalize"
-  
+
     return 0
   }
 
@@ -595,20 +603,17 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     traceIt $LINENO buildVideoOpts " info " "target_vBitrate=$target_vBitrate"
 
     vOpts+="-b:v ${target_vBitrate}k "
-    
-    # Add CUDA-specific options or CPU options
-    if [[ $video_codec == *"nvenc" ]]; then
-      # CUDA encoder options (updated syntax)
+
+    if [[ $video_codec == *"nvenc"* ]]; then
+      # NVENC encoder options
       vOpts+="-preset $vPreset "
       vOpts+="-rc vbr "
-      vOpts+="-cq 28 "
-      vOpts+="-qmin 0 "
-      vOpts+="-qmax 51 "
+      vOpts+="-cq 23 "
       vOpts+="-bufsize $((target_vBitrate * 2))k "
       vOpts+="-maxrate $((target_vBitrate + target_vBitrate/2))k "
       vOpts+="-multipass 2"
     else
-      # CPU encoder options (original)
+      # CPU encoder options
       vOpts+="-preset $vPreset "
       vOpts+="-tune $vTune"
     fi
@@ -623,7 +628,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       if [[ -n $normalize ]]; then
         aFilter+="$normalize"
       fi
-    
+
       # Build audio codec string
       aOpts="-c:a $audio_codec "
       aOpts+="-b:a $target_aBitrate "
@@ -643,20 +648,10 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
   buildSubtitleOpts ()
   {
     if [[ -n $sMap ]]; then
-      # Check if subtitle stream is compatible with mov_text
-      local subtitle_codec
-      subtitle_codec=$($ffmpeg_bin -hide_banner -i "${fullName[$l]}" 2>&1 | grep "Subtitle:" | head -1 | sed 's/.*Subtitle: \([^,]*\).*/\1/')
-
-      if [[ "$subtitle_codec" == "none" ]] || [[ "$subtitle_codec" =~ S_TEXT/WEBVTT ]]; then
-        # Skip incompatible subtitle formats
-        sOpts="-sn"
-        traceIt $LINENO buildSubtitleOpts " warn " "Skipping incompatible subtitle format: $subtitle_codec"
-      else
-        sOpts="-c:s mov_text "
-        sOpts+="-metadata:s:s:0 "
-        sOpts+="language=eng "
-        sOpts+="$sMap"
-      fi
+      sOpts="-c:s mov_text "
+      sOpts+="-metadata:s:s:0 "
+      sOpts+="language=eng "
+      sOpts+="$sMap"
     else
       sOpts="-sn"
     fi
@@ -675,8 +670,8 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
   {
     inFile=$1
 
-    if [[ ! -d "${outDir[$l]}" || ! -h "${outDir[$l]}" ]]; then
-      sudo mkdir -p "${outDir[$l]}"
+    if [[ ! -d "${outDir[$l]}" && ! -h "${outDir[$l]}" ]]; then
+      mkdir -p "${outDir[$l]}"
       check=$?
       if [[ $check -ne 0 ]]; then
         logIt "ERROR: Could not create directory ${outDir[$l]}"
@@ -684,8 +679,8 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
         killWait 1 "Could not create directory ${outDir[$l]}"
         exit $check
       fi
-      sudo chown $user:$group "${outDir[$l]}"
-      sudo chmod 0775 "${outDir[$l]}"
+      chown $user:$group "${outDir[$l]}" 2>/dev/null
+      chmod 0775 "${outDir[$l]}" 2>/dev/null
     fi
     if [[ $hq != 1 ]]; then
       outFile="${outDir[$l]}/${baseName[$l]}.mp4"
@@ -694,16 +689,8 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     fi
 
     ffmpeg_string="${ffmpeg_bin} "
-    #ffmpeg_string="ffmpeg "
     ffmpeg_string+="-hide_banner -y "
     ffmpeg_string+="-loglevel quiet -stats "
-    
-    # Note: Disabled hardware decoding to avoid filter compatibility issues
-    # Hardware encoding will still be used via h264_nvenc codec
-    # if [[ $video_codec == *"nvenc" ]]; then
-    #   ffmpeg_string+="-hwaccel cuda -hwaccel_output_format cuda "
-    # fi
-    
     ffmpeg_string+="-i \"$inFile\" "
     ffmpeg_string+="-i \"$metaFile\" "
     ffmpeg_string+="-map_metadata 1 "
@@ -713,11 +700,14 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     ffmpeg_string+="$aFilter "
     ffmpeg_string+="$sOpts "
     tempOut="$tempDir/converting.mp4"
-  
-    #echo -e "\n${C6}> ${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
+
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
-    echo -e "                                      total time=${C3}$duration${C0}"
+    if [[ $GPU_AVAILABLE == true ]]; then
+      echo -e "                    ${C2}Hardware acceleration: $video_codec${C0} | total time=${C3}$duration${C0}"
+    else
+      echo -e "                                      total time=${C3}$duration${C0}"
+    fi
     bash -c "$ffmpeg_string $tempOut"
     STATUS=$?
 
@@ -726,11 +716,11 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       traceIt $LINENO encodeIt "ERROR!" "STATUS=$STATUS, ffmpeg encode failed."
       echo -e "> ${C1}ERROR: Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
     else
-      sudo mv -f "$tempOut" "$outFile"
+      mv -f "$tempOut" "$outFile"
       # Get file sizes efficiently using stat
       origSize=$(stat -c%s "$inFile")
       newSize=$(stat -c%s "$outFile")
-      
+
       # Convert to human readable format using bash
       origHuman=$(numfmt --to=iec-i --suffix=B "$origSize" 2>/dev/null || echo "${origSize}B")
       newHuman=$(numfmt --to=iec-i --suffix=B "$newSize" 2>/dev/null || echo "${newSize}B")
@@ -757,13 +747,13 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
 
       {
         mkdir -p "$doneDir/${baseDir[$l]}"
-        sudo chgrp -R admins "$doneDir/${baseDir[$l]}"
+        chgrp -R admins "$doneDir/${baseDir[$l]}" 2>/dev/null
         mv "${fullName[$l]}" "$doneDir/${baseDir[$l]}/"
       } >> "$traceLog" 2>&1
 
       logIt "outFile = $outFile"
-      sudo chown $user:$group "$outFile"
-      sudo chmod 0664 "$outFile"
+      chown $user:$group "$outFile" 2>/dev/null
+      chmod 0664 "$outFile" 2>/dev/null
     fi
 
     return $STATUS
@@ -775,6 +765,11 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
 ## MAIN
 traceIt $LINENO " MAIN  " " info " "*** START OF NEW RUN ***"
 echo -e "${C7}\nStarting run of ${C5}Video Converter 2${C0}"
+if [[ $GPU_AVAILABLE == true ]]; then
+  echo -e "  ${C2}Hardware acceleration enabled${C0} (${video_codec})"
+else
+  echo -e "  ${C8}Software encoding${C0} (${video_codec})"
+fi
 umask 002
 
 displayIt "Collecting list of files to process"
@@ -792,16 +787,16 @@ while (( l < ${#fullName[@]})) && (( l < 50 )); do
   logIt "inFile=${fullName[$l]}"
 
   echo -e "\nFile $((l+1)) of ${#fullName[*]}"
-  displayIt "Processing: " "${baseDir[$l]}/${baseName[$l]}" 
+  displayIt "Processing: " "${baseDir[$l]}/${baseName[$l]}"
   probeIt "${fullName[$l]}"
   killWait $?
-  
+
   displayIt "Normalizing audio track"
   normalizeIt "${fullName[$l]}"
   killWait $?
 
   displayIt "Setting encode filters"
-  setOpts 
+  setOpts
   killWait $?
 
   getMeta "${baseName[$l]}"

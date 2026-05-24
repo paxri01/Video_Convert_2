@@ -10,13 +10,14 @@ mapfile -t inFiles < <(find "$inDir" -maxdepth 1 -type f \( -iname "*.mkv" -o -i
 cleanup()
 {
   inFile=$1
-  
+  source=""  # Initialize source variable for each file
+
   # Validate input file exists
   if [[ ! -f "$inFile" ]]; then
     echo "Error: File '$inFile' not found" >&2
     return 1
   fi
-  outFile=$(basename "$inFile" | sed 's/ /\./g' | tr '[:upper:]' '[:lower:]')
+  outFile=$(basename "$inFile" | tr '[:upper:] ' '[:lower:].')
   ext=${inFile##*.}
 
   outFile=${outFile//60fps./}

@@ -62,7 +62,8 @@ while (( i < ${#streams[*]} )); do
     sLanguage=$(grep "streams.stream.${i}\..*language" "$probeFile" | awk -F'[""]' '{ print $2 }')
     if [[ $sLanguage =~ (eng|en) ]]; then
       sCodec_type=$(grep "streams.stream.${i}\.codec_name" "$probeFile" | awk -F'[""]' '{ print $2 }')
-      if ! grep -q 'pgs\|dvd_subtitle\|dvb_subtitle' <<< "$sCodec_type"; then
+      # Skip unsupported subtitle formats including WEBVTT and unknown codecs
+      if ! grep -q 'pgs\|dvd_subtitle\|dvb_subtitle\|webvtt\|none\|unknown' <<< "$sCodec_type"; then
         sStream="0:$i"
         sMap="$sMap -map $sStream"
       fi
