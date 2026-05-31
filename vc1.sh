@@ -21,6 +21,7 @@ source .probe.rc
 
 # Set up hardware acceleration based on input codec and GPU availability
 if [[ $GPU_AVAILABLE == true ]]; then
+  # shellcheck disable=SC2154  # vCodec sourced from .probe.rc
   case "$vCodec" in
     h264|avc)
       hwaccel_args="-hwaccel cuda -c:v h264_cuvid"
@@ -108,17 +109,18 @@ EOF
   $aMap -c:a libfdk_aac -b:a 160k "$baseName"_recode.mp4
 
 # Check if encoding was successful
-if [[ $? -eq 0 ]]; then
+STATUS=$?
+if [[ $STATUS -eq 0 ]]; then
   echo "Encoding completed successfully!"
   echo "Output file: ${baseName}_recode.mp4"
-  
+
   # Optional: Display file size comparison
   if command -v ls &> /dev/null; then
     echo "Original size: $(ls -lh "$inFile" | awk '{print $5}')"
     echo "New size: $(ls -lh "${baseName}_recode.mp4" | awk '{print $5}')"
   fi
 else
-  echo "Encoding failed with exit code: $?"
+  echo "Encoding failed with exit code: $STATUS"
   exit 1
 fi
 
