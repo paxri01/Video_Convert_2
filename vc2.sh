@@ -52,6 +52,7 @@
   video_codec='libx264'
   hq='false'
   lq='false'
+  outBase="$videoDir"
 
   usage()
   {
@@ -95,6 +96,13 @@
 
       -x, --restrict
           Will look for restricted videos in configured directory.
+
+      -z
+          Will look for restricted plex videos in zFeatures directory.
+
+      -zs
+          Will look for series shows in zSeries directory; output goes
+          to /video/zSeries.
 
   AUTHOR
       Written by Richard L. Paxton.
@@ -193,6 +201,18 @@ EOM
         vResize='true'
         vTune='film'
         ;;
+      "zseries")
+        aRemix='true'
+        audioChannels='2'
+        inDir="$searchDir/zSeries"
+        target_FPS='24000/1001'
+        target_QF='.08'
+        target_aBitrate='128k'
+        target_sampleRate='48k'
+        vPreset='fast'
+        vResize='true'
+        vTune='film'
+        ;;
     esac
   }
 
@@ -244,6 +264,10 @@ EOM
         ;;
       -z ) #restricted plex videos
         setEncodeParams "zfeatures"
+        shift
+        ;;
+      -zs) #zseries encodes (output stays under searchDir)
+        setEncodeParams "zseries"
         shift
         ;;
 
@@ -357,17 +381,23 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
 
   displayIt ()
   {
-
-    Text1="$1"
-    Text2="$2"
+    local Text1="$1"
+    local Text2="${2:-}"
+    local padding
 
     if (( $# > 1 )); then
+      local max_t2=$(( padlength - ${#Text1} - 7 ))
+      if (( ${#Text2} > max_t2 )); then
+        Text2="${Text2:0:$(( max_t2 - 3 ))}..."
+      fi
       printf "  %b" "${C8}${Text1}${C4}${Text2}${C0}"
-      printf '%*.*s' 0 $((padlength - ${#Text1} - ${#Text2} - 6 )) "$pad"
+      padding=$(( padlength - ${#Text1} - ${#Text2} - 6 ))
     else
       printf "  %b" "${C8}${Text1}${C0}"
-      printf '%*.*s' 0 $((padlength - ${#Text1} - 6 )) "$pad"
+      padding=$(( padlength - ${#Text1} - 6 ))
     fi
+    (( padding < 1 )) && padding=1
+    printf '%*.*s' 0 $padding "$pad"
 
     rotate &
     rPID=$!
@@ -439,7 +469,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       tempFile="${fileName[$i]}"
       extension[i]="${tempFile##*.}"
       baseName[i]="${tempFile%.*}"
-      outDir[i]="$videoDir/${baseDir[$i]}"
+      outDir[i]="${outBase}/${baseDir[$i]}"
 
       traceIt $LINENO getFiles " info " "== Processing file number: [$(printf '%.3d' $fileNo)] =="
       traceIt $LINENO getFiles " info " " fullName: ${fullName[$i]}"
@@ -703,11 +733,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
 
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
-    if [[ $GPU_AVAILABLE == true ]]; then
-      echo -e "                    ${C2}Hardware acceleration: $video_codec${C0} | total time=${C3}$duration${C0}"
-    else
-      echo -e "                                      total time=${C3}$duration${C0}"
-    fi
+    echo -e "                                      total time=${C3}$duration${C0}"
     bash -c "$ffmpeg_string $tempOut"
     STATUS=$?
 
