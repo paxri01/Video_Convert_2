@@ -617,6 +617,9 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     if [[ -e $inDir/${baseName[$l]}.png ]]; then
       vFilter+=",removelogo=\"$inDir/${baseName[$l]}.png\""
     fi
+    # Force 8-bit output. h264_nvenc cannot encode 10-bit (e.g. UHD BluRay
+    # HEVC Main 10) sources and aborts before the first frame otherwise.
+    vFilter+=",format=yuv420p"
     traceIt $LINENO buildVideoFilter " info " "vFilter: $vFilter"
   }
 
