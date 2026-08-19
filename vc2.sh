@@ -46,6 +46,10 @@
   tempDir="/video/temp"
   user="serviio"
   group="video"
+  # Concurrent encodes. With NVDEC handling decode a single job uses roughly
+  # 570% CPU, so 2 fits comfortably in 16 cores while keeping each job's
+  # single-threaded loudnorm filter on its own core. Override with -j.
+  maxJobs=2
 
   # Default video parameters
   audio_codec='libfdk_aac'
@@ -69,6 +73,10 @@
 
       -h, --help
           This documentation.
+
+      -j, --jobs <n>
+          Number of encodes to run concurrently (default 2). Use 1 for the
+          previous serial behavior with live per-file progress output.
 
       --hq
           Will re-encode video with high quality settings.
@@ -237,6 +245,14 @@ EOM
       --no-gpu) #Disable hardware acceleration
         GPU_AVAILABLE=false
         shift
+        ;;
+      -j | --jobs) #Number of concurrent encodes
+        if [[ ! $2 =~ ^[1-9][0-9]*$ ]]; then
+          echo -e "${C1}ERROR: 11 - --jobs requires a positive integer${C0}"
+          usage
+        fi
+        maxJobs=$2
+        shift 2
         ;;
       -m | --movie) #Process movies
         setEncodeParams "movie"
@@ -747,16 +763,28 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
 
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
-    echo -e "                                      total time=${C3}$duration${C0}"
-    bash -c "$ffmpeg_string $tempOut"
-    STATUS=$?
+    jobLog=''
+    if (( maxJobs > 1 )); then
+      # Concurrent jobs would interleave ffmpeg's -stats output on the terminal,
+      # so each job's progress is captured to its own log instead.
+      jobLog="$logDir/encode.$$.$l.log"
+      bash -c "$ffmpeg_string $tempOut" > "$jobLog" 2>&1
+      STATUS=$?
+    else
+      echo -e "                                      total time=${C3}$duration${C0}"
+      bash -c "$ffmpeg_string $tempOut"
+      STATUS=$?
+    fi
 
     if (( STATUS > 0 )); then
       logIt "Re-encoding of $inFile failed!"
       traceIt $LINENO encodeIt "ERROR!" "STATUS=$STATUS, ffmpeg encode failed."
-      echo -e "> ${C1}ERROR: Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
+      echo -e "> ${C1}ERROR (${baseName[$l]}): Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
+      [[ -n $jobLog ]] && echo -e "> ${C1}ffmpeg output: $jobLog${C0}"
+      rm -f "$tempOut"
     else
       mv -f "$tempOut" "$outFile"
+      [[ -n $jobLog ]] && rm -f "$jobLog"
       # Get file sizes efficiently using stat
       origSize=$(stat -c%s "$inFile")
       newSize=$(stat -c%s "$outFile")
@@ -770,12 +798,14 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
         decrease=$(awk "BEGIN {printf \"%.2f\", (($origSize - $newSize)/$origSize)*100}")
         {
           echo "---------------------------"
+          echo -e "${C5}${baseName[$l]}${C0}"
           echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C2}File decreased by ${decrease}%${C0}"
           echo "---------------------------"
         } | tee -a "$logFile"
       else
         {
           echo "---------------------------"
+          echo -e "${C5}${baseName[$l]}${C0}"
           echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C1}File increased by ${diff}%${C0}"
           echo "---------------------------"
         } | tee -a "$logFile"
@@ -794,6 +824,20 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
       logIt "outFile = $outFile"
       chown $user:$group "$outFile" 2>/dev/null
       chmod 0664 "$outFile" 2>/dev/null
+    fi
+
+    # Logged here rather than in the main loop so the markers stay with the job
+    # when encodes run concurrently.
+    logIt "------------------------------------------------------------------"
+    logIt "End of ${baseName[$l]}"
+    logIt "^----------------------------------------------------------------^"
+    traceIt $LINENO encodeIt " info " "END OF JOB: $((l+1))"
+    if (( maxJobs > 1 )); then
+      if (( STATUS > 0 )); then
+        echo -e "  ${C1}Failed${C0}: ${baseName[$l]}"
+      else
+        echo -e "  ${C2}Done${C0}: ${baseName[$l]}"
+      fi
     fi
 
     return $STATUS
@@ -841,13 +885,26 @@ while (( l < ${#fullName[@]})) && (( l < 50 )); do
 
   getMeta "${baseName[$l]}"
 
-  encodeIt "${fullName[$l]}"
+  if (( maxJobs > 1 )); then
+    # Block until a slot frees up, then run this encode in the background. The
+    # subshell gets a copy of the loop state, so the parent advancing $l cannot
+    # disturb a job already running.
+    while (( $(jobs -rp | wc -l) >= maxJobs )); do wait -n; done
+    encodeIt "${fullName[$l]}" &
+    echo -e "  ${C8}Started${C0} (${C3}$(( $(jobs -rp | wc -l) ))${C0}/${maxJobs} running)"
+  else
+    encodeIt "${fullName[$l]}"
+    echo -e "  ${C2}Done${C0}"
+  fi
 
-  logIt "------------------------------------------------------------------"
-  logIt "End of ${baseName[$l]}"
-  logIt "^----------------------------------------------------------------^"
   traceIt $LINENO " MAIN  " " info " "END OF LOOP: $((l+1))"
   echo "" >> "$traceLog"
-  echo -e "  ${C2}Done${C0}"
   ((l++))
 done
+
+# Let any still-running background encodes finish before exiting.
+if (( maxJobs > 1 )); then
+  running=$(jobs -rp | wc -l)
+  (( running > 0 )) && echo -e "\n${C7}Waiting on ${C3}${running}${C7} remaining encode(s)...${C0}"
+  wait
+fi
