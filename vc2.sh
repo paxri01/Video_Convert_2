@@ -46,10 +46,15 @@
   tempDir="/video/temp"
   user="serviio"
   group="video"
-  # Concurrent encodes. With NVDEC handling decode a single job uses roughly
-  # 570% CPU, so 2 fits comfortably in 16 cores while keeping each job's
-  # single-threaded loudnorm filter on its own core. Override with -j.
-  maxJobs=2
+  # Concurrent encodes. Defaults to 1 because concurrency buys nothing once
+  # decode is on NVDEC: each ffmpeg holds its own CUDA context and the GPU
+  # time-slices between them rather than running them in parallel. Measured on
+  # 6x20min SNL segments, warm cache, 2 reps -- throughput was flat at
+  # 2.28 files/min for j=1, j=2 and j=3 (<1% spread), while CPU sat 70-75%
+  # idle and three jobs drew only 398% CPU against one job's 334%.
+  # Raising this is only useful when the CPU does the decoding (--no-gpu),
+  # where there is CPU work to overlap. Override with -j.
+  maxJobs=1
 
   # Default video parameters
   audio_codec='libfdk_aac'
@@ -75,8 +80,10 @@
           This documentation.
 
       -j, --jobs <n>
-          Number of encodes to run concurrently (default 2). Use 1 for the
-          previous serial behavior with live per-file progress output.
+          Number of encodes to run concurrently (default 1). Values above 1
+          give no speedup while the GPU is decoding, since the encodes
+          serialize on the GPU; they also replace live per-file progress with
+          batched completion reports. Worth trying only with --no-gpu.
 
       --hq
           Will re-encode video with high quality settings.
