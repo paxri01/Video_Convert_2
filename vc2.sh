@@ -784,7 +784,14 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
       rm -f "$tempOut"
     else
       mv -f "$tempOut" "$outFile"
-      [[ -n $jobLog ]] && rm -f "$jobLog"
+      # Concurrent jobs cannot share the terminal for live progress, so recover
+      # ffmpeg's final stats line from the job log and report it on completion.
+      # -stats separates updates with \r, hence the translation.
+      encStats=''
+      if [[ -n $jobLog && -f $jobLog ]]; then
+        encStats=$(tr '\r' '\n' < "$jobLog" | grep -E '^frame=' | tail -1)
+        rm -f "$jobLog"
+      fi
       # Get file sizes efficiently using stat
       origSize=$(stat -c%s "$inFile")
       newSize=$(stat -c%s "$outFile")
@@ -796,20 +803,19 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
       if (( newSize < origSize )); then
         # File decreased - show positive percentage
         decrease=$(awk "BEGIN {printf \"%.2f\", (($origSize - $newSize)/$origSize)*100}")
-        {
-          echo "---------------------------"
-          echo -e "${C5}${baseName[$l]}${C0}"
-          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C2}File decreased by ${decrease}%${C0}"
-          echo "---------------------------"
-        } | tee -a "$logFile"
+        sizeLine="Orig Size: $origHuman // New Size: $newHuman // ${C2}File decreased by ${decrease}%${C0}"
       else
-        {
-          echo "---------------------------"
-          echo -e "${C5}${baseName[$l]}${C0}"
-          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C1}File increased by ${diff}%${C0}"
-          echo "---------------------------"
-        } | tee -a "$logFile"
+        sizeLine="Orig Size: $origHuman // New Size: $newHuman // ${C1}File increased by ${diff}%${C0}"
       fi
+
+      # Assembled and emitted as one write so that concurrent jobs cannot
+      # interleave their report lines with each other.
+      report="---------------------------"$'\n'
+      report+="${C5}${baseName[$l]}${C0}"$'\n'
+      [[ -n $encStats ]] && report+="${C8}total time=${duration} // ${encStats}${C0}"$'\n'
+      report+="${sizeLine}"$'\n'
+      report+="---------------------------"
+      echo -e "$report" | tee -a "$logFile"
 
       # Cleanup temp files and variables
       rm "$metaFile" >/dev/null 2>&1
