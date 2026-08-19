@@ -741,7 +741,9 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
     ffmpeg_string+="$aOpts "
     ffmpeg_string+="$aFilter "
     ffmpeg_string+="$sOpts "
-    tempOut="$tempDir/converting.mp4"
+    # Unique per job: a fixed name here is shared by concurrent encodes, and the
+    # mv below would move another job's partial file to this job's destination.
+    tempOut="$tempDir/converting.$$.$l.mp4"
 
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
