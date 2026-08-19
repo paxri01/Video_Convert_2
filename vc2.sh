@@ -327,18 +327,26 @@ EOM
     fi
   fi
 
+  hwaccel_args=''
   if [[ $GPU_AVAILABLE == true ]]; then
     if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
       echo -e "${C3}WARNING: NVIDIA GPU detected but h264_nvenc not available, falling back to software encoding${C0}"
       GPU_AVAILABLE=false
     else
       video_codec='h264_nvenc'
+      # Decode on NVDEC in addition to encoding on NVENC. Decoded frames are
+      # downloaded to system memory, so the CPU filter chain (scale/fps/format)
+      # is unaffected. ffmpeg falls back to software decode per-stream if the
+      # source codec is not NVDEC-supported.
+      if $ffmpeg_bin -hwaccels 2>/dev/null | grep -qw 'cuda'; then
+        hwaccel_args='-hwaccel cuda'
+      fi
     fi
   fi
 
 # Define Global variables
 declare -a fullName fileName extension baseName baseDir outDir
-declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
+declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
 
 ## Defined Functions
   logIt ()
@@ -724,6 +732,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     ffmpeg_string="${ffmpeg_bin} "
     ffmpeg_string+="-hide_banner -y "
     ffmpeg_string+="-loglevel quiet -stats "
+    [[ -n $hwaccel_args ]] && ffmpeg_string+="$hwaccel_args "
     ffmpeg_string+="-i \"$inFile\" "
     ffmpeg_string+="-i \"$metaFile\" "
     ffmpeg_string+="-map_metadata 1 "
