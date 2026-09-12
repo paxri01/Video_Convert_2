@@ -99,8 +99,9 @@ if [[ -n $mainAStream ]]; then
   fi
 fi
 
-vQF=$(mediainfo "$inFile" | grep 'Bits' | awk '{ print $3 }')
-fSize=$(mediainfo "$inFile" | grep 'File size' | awk -F': ' '{ print $2 }')
+## Only take the first (main) video track; cover art/thumbnail tracks add extra lines.
+vQF=$(mediainfo "$inFile" | awk -F': ' '/Bits\/\(Pixel\*Frame\)/ { print $2; exit }')
+fSize=$(mediainfo "$inFile" | awk -F': ' '/^File size/ { print $2; exit }')
 ## Remove leading spaces
 #aMap=$(sed 's/^ *//' <<< "$aMap")
 aMap=${aMap# }
@@ -120,7 +121,7 @@ vFPS=$vFPS
 vLanguage="$vLanguage"
 vMap="$vMap"
 mainVideo=$mainVideo
-vQF=$vQF
+vQF="$vQF"
 ## AUDIO (Main)
 aBitrate=$aBitrate
 aChannels=$aChannels

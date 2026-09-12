@@ -46,10 +46,47 @@
   tempDir="/video/temp"
   user="serviio"
   group="video"
+  # Concurrent encodes. Defaults to 1 because concurrency buys nothing once
+  # decode is on NVDEC: each ffmpeg holds its own CUDA context and the GPU
+  # time-slices between them rather than running them in parallel. Measured on
+  # 6x20min SNL segments, warm cache, 2 reps -- throughput was flat at
+  # 2.28 files/min for j=1, j=2 and j=3 (<1% spread), while CPU sat 70-75%
+  # idle and three jobs drew only 398% CPU against one job's 334%.
+  # Raising this is only useful when the CPU does the decoding (--no-gpu),
+  # where there is CPU work to overlap. Override with -j.
+  maxJobs=1
 
   # Default video parameters
   audio_codec='libfdk_aac'
-  video_codec='libx264'
+  video_codec='libx265'
+
+  # NVENC preset. This is NOT x264's -preset scale, and the two must not be
+  # mixed: handing "fast"/"medium"/"slow" to NVENC selects its LEGACY preset
+  # table, where "fast" means "hp 1 pass" -- the worst quality-per-bit setting it
+  # has. That is what this script did for every GPU encode until 2026-09-11.
+  # Measured on the 'series' profile (cq 23, pinned at the maxrate ceiling, so
+  # both runs spent the same bits): legacy "fast" scored SSIM 0.98754, p6 scored
+  # 0.99080 -- same bitrate, materially better picture. p5/p6/p7 are
+  # indistinguishable for h264_nvenc on this GPU (p7 came out byte-identical to
+  # p6), and p6 still runs ~11x realtime, so there is nothing to buy by going
+  # faster. $vPreset below stays on x264's scale for the --no-gpu path.
+  nvenc_preset='p6'
+
+  # Constant-quality levels. NVENC's CQ scale and x265's CRF scale are NOT the
+  # same scale, so these are calibrated separately -- a single shared number
+  # happened to work while both encoders were H.264 and does not survive the move
+  # to HEVC. $target_QF still sizes the maxrate/bufsize ceiling below, which is
+  # what keeps per-episode worst-case size predictable; it no longer pretends to
+  # set an average bitrate.
+  #
+  # Measured on the 'series' profile against the H.264 output this script
+  # produced before the HEVC switch (GPU 2476 kb/s @ SSIM 0.98948,
+  # CPU 1673 kb/s @ 0.99006):
+  #   hevc_nvenc cq 26 -> 2168 kb/s @ 0.99110   smaller AND better
+  #   libx265    crf 23 -> 1472 kb/s @ 0.99029   smaller AND better
+  # Raise nvenc_cq to 28 for ~26% smaller files at exactly the old quality.
+  nvenc_cq='26'
+  cpu_crf='23'
   hq='false'
   lq='false'
   outBase="$videoDir"
@@ -69,6 +106,12 @@
 
       -h, --help
           This documentation.
+
+      -j, --jobs <n>
+          Number of encodes to run concurrently (default 1). Values above 1
+          give no speedup while the GPU is decoding, since the encodes
+          serialize on the GPU; they also replace live per-file progress with
+          batched completion reports. Worth trying only with --no-gpu.
 
       --hq
           Will re-encode video with high quality settings.
@@ -238,6 +281,14 @@ EOM
         GPU_AVAILABLE=false
         shift
         ;;
+      -j | --jobs) #Number of concurrent encodes
+        if [[ ! $2 =~ ^[1-9][0-9]*$ ]]; then
+          echo -e "${C1}ERROR: 11 - --jobs requires a positive integer${C0}"
+          usage
+        fi
+        maxJobs=$2
+        shift 2
+        ;;
       -m | --movie) #Process movies
         setEncodeParams "movie"
         shift
@@ -327,18 +378,26 @@ EOM
     fi
   fi
 
+  hwaccel_args=''
   if [[ $GPU_AVAILABLE == true ]]; then
-    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
-      echo -e "${C3}WARNING: NVIDIA GPU detected but h264_nvenc not available, falling back to software encoding${C0}"
+    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'hevc_nvenc'; then
+      echo -e "${C3}WARNING: NVIDIA GPU detected but hevc_nvenc not available, falling back to software encoding${C0}"
       GPU_AVAILABLE=false
     else
-      video_codec='h264_nvenc'
+      video_codec='hevc_nvenc'
+      # Decode on NVDEC in addition to encoding on NVENC. Decoded frames are
+      # downloaded to system memory, so the CPU filter chain (scale/fps/format)
+      # is unaffected. ffmpeg falls back to software decode per-stream if the
+      # source codec is not NVDEC-supported.
+      if $ffmpeg_bin -hwaccels 2>/dev/null | grep -qw 'cuda'; then
+        hwaccel_args='-hwaccel cuda'
+      fi
     fi
   fi
 
 # Define Global variables
 declare -a fullName fileName extension baseName baseDir outDir
-declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
+declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
 
 ## Defined Functions
   logIt ()
@@ -617,6 +676,15 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     if [[ -e $inDir/${baseName[$l]}.png ]]; then
       vFilter+=",removelogo=\"$inDir/${baseName[$l]}.png\""
     fi
+    # 10-bit output. The old 8-bit clamp was here because h264_nvenc cannot encode
+    # 10-bit and aborted before the first frame; HEVC has no such limit, and
+    # 10-bit measured smaller AND better on both encoders (hevc_nvenc cq26:
+    # 2168 kb/s @ SSIM 0.99110 vs 8-bit 2178 @ 0.99002; libx265 crf23: 1472 @
+    # 0.99029 vs 8-bit 1487 @ 0.98916). Confirmed 2026-09-11 from the Plex server
+    # log that HEVC Main 10 direct-plays on this setup's PC, phone and Samsung TV
+    # clients -- only AV1 was transcoded. The --no-gpu path needs a multilib x265
+    # or this silently falls back to 8-bit.
+    vFilter+=",format=yuv420p10le"
     traceIt $LINENO buildVideoFilter " info " "vFilter: $vFilter"
   }
 
@@ -629,24 +697,47 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     local _vSize _hSize
     _vSize=$(awk "BEGIN {printf \"%.0f\", $vHeight*$scale}")
     _hSize=$(awk "BEGIN {printf \"%.0f\", $vWidth*$scale}")
+    # NOTE: this is a rate CEILING, not a target. Both encoders run in constant
+    # quality mode below, so $target_QF sets how many bits an episode is allowed
+    # at most, and the encoder spends less when the content is easy.
     target_vBitrate=$(awk "BEGIN {printf \"%.0f\", ($target_QF*$_hSize*$_vSize*$FPS)/1000}")
-    traceIt $LINENO buildVideoOpts " info " "target_vBitrate=$target_vBitrate"
+    traceIt $LINENO buildVideoOpts " info " "rate ceiling target_vBitrate=$target_vBitrate"
 
-    vOpts+="-b:v ${target_vBitrate}k "
+    local _maxrate=$((target_vBitrate + target_vBitrate/2))
+    local _bufsize=$((target_vBitrate * 2))
 
     if [[ $video_codec == *"nvenc"* ]]; then
       # NVENC encoder options
-      vOpts+="-preset $vPreset "
+      vOpts+="-preset $nvenc_preset "
       vOpts+="-rc vbr "
-      vOpts+="-cq 23 "
-      vOpts+="-bufsize $((target_vBitrate * 2))k "
-      vOpts+="-maxrate $((target_vBitrate + target_vBitrate/2))k "
+      vOpts+="-cq $nvenc_cq "
+      # Explicitly zero the average bitrate. NVENC DISCARDS -b:v the moment -cq
+      # is set and honours only -maxrate, so the "-b:v ${target_vBitrate}k" this
+      # script used to emit here was dead: verified that -cq 23 -b:v 4000k and
+      # -cq 23 -b:v 0 produce byte-identical output.
+      vOpts+="-b:v 0 "
+      vOpts+="-bufsize ${_bufsize}k "
+      vOpts+="-maxrate ${_maxrate}k "
       vOpts+="-multipass 2"
     else
-      # CPU encoder options
+      # CPU encoder options. Previously pure ABR (-b:v), which made --no-gpu
+      # behave quite differently from the GPU path; now constant-quality with the
+      # same ceiling so the two agree.
+      vOpts+="-crf $cpu_crf "
+      vOpts+="-maxrate ${_maxrate}k "
+      vOpts+="-bufsize ${_bufsize}k "
       vOpts+="-preset $vPreset "
-      vOpts+="-tune $vTune"
+      # -tune is x264's vocabulary. x265 rejects "film" outright ("Error setting
+      # preset/tune (null)/film") and aborts the encode, so only pass it to x264.
+      [[ $video_codec == 'libx264' ]] && vOpts+="-tune $vTune"
     fi
+
+    # MP4 can label HEVC as either hvc1 or hev1, and ffmpeg defaults to hev1.
+    # Apple platforms (iOS, macOS/Safari, Apple TV, QuickTime) decode ONLY hvc1
+    # and will refuse or transcode hev1. This is a container tag, not a stream
+    # change -- remuxing hev1 to hvc1 produces a byte-identical payload -- so
+    # there is no cost to always setting it. Everything else accepts hvc1 too.
+    [[ $video_codec == *hevc* || $video_codec == 'libx265' ]] && vOpts+=" -tag:v hvc1"
     traceIt $LINENO buildVideoOpts " info " "vOpts: $vOpts"
   }
 
@@ -721,6 +812,7 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     ffmpeg_string="${ffmpeg_bin} "
     ffmpeg_string+="-hide_banner -y "
     ffmpeg_string+="-loglevel quiet -stats "
+    [[ -n $hwaccel_args ]] && ffmpeg_string+="$hwaccel_args "
     ffmpeg_string+="-i \"$inFile\" "
     ffmpeg_string+="-i \"$metaFile\" "
     ffmpeg_string+="-map_metadata 1 "
@@ -729,20 +821,41 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
     ffmpeg_string+="$aOpts "
     ffmpeg_string+="$aFilter "
     ffmpeg_string+="$sOpts "
-    tempOut="$tempDir/converting.mp4"
+    # Unique per job: a fixed name here is shared by concurrent encodes, and the
+    # mv below would move another job's partial file to this job's destination.
+    tempOut="$tempDir/converting.$$.$l.mp4"
 
     traceIt $LINENO encodeIt "  CMD  " "> $ffmpeg_string $outFile"
 
-    echo -e "                                      total time=${C3}$duration${C0}"
-    bash -c "$ffmpeg_string $tempOut"
-    STATUS=$?
+    jobLog=''
+    if (( maxJobs > 1 )); then
+      # Concurrent jobs would interleave ffmpeg's -stats output on the terminal,
+      # so each job's progress is captured to its own log instead.
+      jobLog="$logDir/encode.$$.$l.log"
+      bash -c "$ffmpeg_string $tempOut" > "$jobLog" 2>&1
+      STATUS=$?
+    else
+      echo -e "                                      total time=${C3}$duration${C0}"
+      bash -c "$ffmpeg_string $tempOut"
+      STATUS=$?
+    fi
 
     if (( STATUS > 0 )); then
       logIt "Re-encoding of $inFile failed!"
       traceIt $LINENO encodeIt "ERROR!" "STATUS=$STATUS, ffmpeg encode failed."
-      echo -e "> ${C1}ERROR: Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
+      echo -e "> ${C1}ERROR (${baseName[$l]}): Run the following to see details why:\n${ffmpeg_string//-loglevel quiet -stats /} $tempOut${C0}\n"
+      [[ -n $jobLog ]] && echo -e "> ${C1}ffmpeg output: $jobLog${C0}"
+      rm -f "$tempOut"
     else
       mv -f "$tempOut" "$outFile"
+      # Concurrent jobs cannot share the terminal for live progress, so recover
+      # ffmpeg's final stats line from the job log and report it on completion.
+      # -stats separates updates with \r, hence the translation.
+      encStats=''
+      if [[ -n $jobLog && -f $jobLog ]]; then
+        encStats=$(tr '\r' '\n' < "$jobLog" | grep -E '^frame=' | tail -1)
+        rm -f "$jobLog"
+      fi
       # Get file sizes efficiently using stat
       origSize=$(stat -c%s "$inFile")
       newSize=$(stat -c%s "$outFile")
@@ -754,18 +867,19 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       if (( newSize < origSize )); then
         # File decreased - show positive percentage
         decrease=$(awk "BEGIN {printf \"%.2f\", (($origSize - $newSize)/$origSize)*100}")
-        {
-          echo "---------------------------"
-          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C2}File decreased by ${decrease}%${C0}"
-          echo "---------------------------"
-        } | tee -a "$logFile"
+        sizeLine="Orig Size: $origHuman // New Size: $newHuman // ${C2}File decreased by ${decrease}%${C0}"
       else
-        {
-          echo "---------------------------"
-          echo -e "Orig Size: $origHuman // New Size: $newHuman // ${C1}File increased by ${diff}%${C0}"
-          echo "---------------------------"
-        } | tee -a "$logFile"
+        sizeLine="Orig Size: $origHuman // New Size: $newHuman // ${C1}File increased by ${diff}%${C0}"
       fi
+
+      # Assembled and emitted as one write so that concurrent jobs cannot
+      # interleave their report lines with each other.
+      report="---------------------------"$'\n'
+      report+="${C5}${baseName[$l]}${C0}"$'\n'
+      [[ -n $encStats ]] && report+="${C8}total time=${duration} // ${encStats}${C0}"$'\n'
+      report+="${sizeLine}"$'\n'
+      report+="---------------------------"
+      echo -e "$report" | tee -a "$logFile"
 
       # Cleanup temp files and variables
       rm "$metaFile" >/dev/null 2>&1
@@ -780,6 +894,20 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile
       logIt "outFile = $outFile"
       chown $user:$group "$outFile" 2>/dev/null
       chmod 0664 "$outFile" 2>/dev/null
+    fi
+
+    # Logged here rather than in the main loop so the markers stay with the job
+    # when encodes run concurrently.
+    logIt "------------------------------------------------------------------"
+    logIt "End of ${baseName[$l]}"
+    logIt "^----------------------------------------------------------------^"
+    traceIt $LINENO encodeIt " info " "END OF JOB: $((l+1))"
+    if (( maxJobs > 1 )); then
+      if (( STATUS > 0 )); then
+        echo -e "  ${C1}Failed${C0}: ${baseName[$l]}"
+      else
+        echo -e "  ${C2}Done${C0}: ${baseName[$l]}"
+      fi
     fi
 
     return $STATUS
@@ -827,13 +955,26 @@ while (( l < ${#fullName[@]})) && (( l < 50 )); do
 
   getMeta "${baseName[$l]}"
 
-  encodeIt "${fullName[$l]}"
+  if (( maxJobs > 1 )); then
+    # Block until a slot frees up, then run this encode in the background. The
+    # subshell gets a copy of the loop state, so the parent advancing $l cannot
+    # disturb a job already running.
+    while (( $(jobs -rp | wc -l) >= maxJobs )); do wait -n; done
+    encodeIt "${fullName[$l]}" &
+    echo -e "  ${C8}Started${C0} (${C3}$(( $(jobs -rp | wc -l) ))${C0}/${maxJobs} running)"
+  else
+    encodeIt "${fullName[$l]}"
+    echo -e "  ${C2}Done${C0}"
+  fi
 
-  logIt "------------------------------------------------------------------"
-  logIt "End of ${baseName[$l]}"
-  logIt "^----------------------------------------------------------------^"
   traceIt $LINENO " MAIN  " " info " "END OF LOOP: $((l+1))"
   echo "" >> "$traceLog"
-  echo -e "  ${C2}Done${C0}"
   ((l++))
 done
+
+# Let any still-running background encodes finish before exiting.
+if (( maxJobs > 1 )); then
+  running=$(jobs -rp | wc -l)
+  (( running > 0 )) && echo -e "\n${C7}Waiting on ${C3}${running}${C7} remaining encode(s)...${C0}"
+  wait
+fi

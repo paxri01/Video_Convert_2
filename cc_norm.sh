@@ -9,7 +9,10 @@ sample=${3:-'-ss 01:00 -t 06:00'}
 target_i="-24.0"
 target_tp="-2.0"
 target_lra="11.0"
-outFile="/tmp/sample.json"
+# Unique per invocation: a fixed path here is clobbered when several encodes
+# run concurrently, silently applying one file's loudnorm values to another.
+outFile=$(mktemp -t cc_norm.XXXXXXXXXX.json) || exit 1
+trap 'rm -f "$outFile"' EXIT
 
 ff_string="${ffmpeg_bin} -hide_banner -y"
 ff_string+=" ${sample}"
@@ -56,5 +59,4 @@ loudnorm_string+="measured_thresh=${measured_thresh}:"
 loudnorm_string+="offset=${measured_offset}"
 
 echo "$loudnorm_string"
-rm "$outFile"
 exit $STATUS
