@@ -1,6 +1,8 @@
 # Video_Convert_2
 
-A collection of bash scripts to batch re-encode video files into portable MP4 format, suitable for playback on any Smart TV or media server (works great with Plex/Serviio). The default settings produce files that play on virtually any device without transcoding.
+A collection of bash scripts to batch re-encode video files into portable MP4 format, suitable for playback on any Smart TV or media server (works great with Plex/Serviio).
+
+The default output is **HEVC Main 10** (`hvc1`-tagged) with stereo AAC. That direct-plays on current TVs, phones and desktop clients, but it is a stronger requirement than the H.264 these scripts used to emit — if you serve older or unusual clients, verify direct play before converting a library, since a client that cannot decode it makes the *server* transcode. AV1 is deliberately not used for this reason.
 
 Make sure to compare the input video with the output using `mediainfo`. You may be surprised by the results — the output is often better quality than the input.
 
@@ -9,16 +11,17 @@ Make sure to compare the input video with the output using `mediainfo`. You may 
 | Script | Purpose |
 |--------|---------|
 | `vc2.sh` | Main batch video converter (auto-detects NVIDIA GPU) |
-| `vc1.sh` | Single-file converter (experimental) |
+| `vc1.sh` | Single-file converter, tuned for compression or quality |
 | `cc_probe.sh` | Helper: probe video file and output stream info |
 | `cc_norm.sh` | Helper: analyze audio and output loudnorm parameters |
 | `vc_rename.sh` | Utility: normalize video filenames |
+| `tools/build-ffmpeg.sh` | Rebuild the `/usr/local` ffmpeg these scripts depend on |
 
 ---
 
 ## vc2.sh — Batch Video Converter
 
-Searches a configured directory for video files, probes each one, normalizes audio, and re-encodes to MP4. Automatically uses NVIDIA hardware acceleration (`h264_nvenc`) when an NVIDIA GPU is detected; falls back to `libx264` software encoding otherwise.
+Searches a configured directory for video files, probes each one, normalizes audio, and re-encodes to MP4. Automatically uses NVIDIA hardware acceleration (`hevc_nvenc`) when an NVIDIA GPU is detected; falls back to `libx265` software encoding otherwise. The software path needs a **multilib x265** — against an 8-bit-only build the 10-bit output silently degrades.
 
 ### Synopsis
 
@@ -35,7 +38,7 @@ Searches a configured directory for video files, probes each one, normalizes aud
                       fast preset, with resize.
 
     --no-gpu          Disable hardware acceleration even if an NVIDIA GPU
-                      is detected; forces libx264 software encoding.
+                      is detected; forces libx265 software encoding.
 
     -m, --movie       Feature-length movies  (searches: renamed/features/)
     --mv              Music videos           (searches: renamed/mtv/)
@@ -55,7 +58,11 @@ Searches a configured directory for video files, probes each one, normalizes aud
 | video | 30 | 0.20 | 192k | slow | no |
 | restricted | 25 | 0.08 | 92k | fast | yes |
 
-Video bitrate is calculated dynamically from the quality factor: `bitrate = QF × width × height × FPS / 1000`.  
+The Preset column applies to the **CPU** encoder only. NVENC uses its own `p1`–`p7` scale (`nvenc_preset`, default `p6`) — x264's preset names mean something quite different there, and passing them selects NVENC's legacy table.
+
+Quality Factor is a **rate ceiling**, not a target: it sizes `-maxrate`/`-bufsize`, while `nvenc_cq` / `cpu_crf` decide the actual quality and the encoder spends less on easy content.
+
+The rate ceiling is calculated dynamically from the quality factor: `ceiling = QF × width × height × FPS / 1000`, with `-maxrate` at 1.5x and `-bufsize` at 2x that.  
 Resize: videos wider than 1280px are scaled down to 1280px; narrower than 720px are scaled up to 720px.
 
 ### Examples
@@ -73,13 +80,34 @@ Resize: videos wider than 1280px are scaled down to 1280px; narrower than 720px 
 
 ## vc1.sh — Single-File Converter
 
-Re-encodes a single video file. Auto-detects NVIDIA GPU and uses hardware acceleration when available.
+Re-encodes one video file for either optimal compression or optimal quality. Defaults to HEVC on NVENC; `-hwaccel cuda` lets ffmpeg pick NVDEC per stream and fall back to software for codecs the GPU cannot decode.
 
-    vc1.sh <inFile>
+    vc1.sh [options] <inFile>
 
-Output is written to `<basename>_recode.mp4` in the current directory.
+| Option | Meaning |
+|--------|---------|
+| `-m, --mode compression\|quality` | Quality intent (default: `compression`) |
+| `-c, --cpu` | Encode with libx265 instead of hevc_nvenc |
+| `--av1` | Encode AV1 with SVT-AV1 (implies `--cpu`) |
+| `-s, --original-size` | Do not cap width at 1280px |
+| `--max-width N` | Change the width cap |
+| `--fps N` | Frame rate cap (default `24000/1001`); `none` to disable |
+| `-q, --cq N` | Override the quality level |
+| `--mp4` | Write MP4 instead of MKV |
+| `--verify` | Score the result against the source with VMAF |
+| `-n, --dry-run` | Print the ffmpeg command and exit |
+| `-o, --output FILE` | Output path |
 
-Supported input codecs for hardware decoding: h264, hevc, av1, vp8, vp9, mpeg1, mpeg2, mpeg4, vc1, mjpeg. Falls back to software decode + NVENC encode for other codecs, or full software encode when no GPU is available.
+Output defaults to `<basename>_recode.mkv`. Quality ladder:
+
+| Mode | hevc_nvenc | libx265 | libsvtav1 |
+|------|:----------:|:-------:|:---------:|
+| compression | cq 29 | crf 26 (slow) | crf 34 (preset 6) |
+| quality | cq 24 | crf 20 (slow) | crf 28 (preset 5) |
+
+The frame rate is *capped*, never forced, so 23.976fps and slower sources pass through untouched. Nothing is ever upscaled. Subtitles, chapters and metadata are carried through.
+
+Measured on 30s of 720p, SSIM against a common reference: compression mode 1419 kb/s @ 0.98937, quality mode 2739 kb/s @ 0.99362. `--av1` gives the best quality-per-byte (1254 kb/s @ 0.99119) and is roughly 3x faster than `--cpu`, but is not widely direct-played — see the note at the top of this file.
 
 ---
 
@@ -199,3 +227,18 @@ Ensure `/usr/local/bin` is in your `$PATH`.
 \- Cheers,
 
 Rick
+
+---
+
+## tools/build-ffmpeg.sh — ffmpeg Builder
+
+Rebuilds the hand-compiled ffmpeg in `/usr/local` that these scripts call directly. Records the exact configure line, so the encoder features `vc1.sh` and `vc2.sh` rely on (SVT-AV1, libvmaf, `scale_cuda`, multilib x265) are reproducible rather than folklore.
+
+    tools/build-ffmpeg.sh
+
+Honours `BUILD_ROOT`, `PREFIX` and `X265_TAG` from the environment. Ends with a dozen self-checks that assert each feature by actually encoding with it.
+
+Two findings baked into it, both of which cost real time to diagnose:
+
+- **`--enable-cuda-nvcc` cannot be used** on a current Fedora. CUDA 12.9 refuses gcc 15 outright, and against gcc-14 it collides with glibc 2.42's C23 `sinpi`/`cospi`/`tanpi`. `--enable-cuda-llvm` builds the same filters via clang's NVPTX backend and needs no CUDA toolkit at all. `--enable-libnpp` is also gone — upstream removed it, so `scale_npp` no longer exists.
+- **x265 must be built from a real, reachable git tag.** Its CMakeLists guards the shared-library install with `# shared library is not installed if a tag is not found`, so a tagless *or shallow* checkout installs only `libx265.a` and silently leaves the previous `.so` in place. The symptom is an ffmpeg that still reports 8-bit-only x265 after an apparently successful multilib build, and an `HEVC encoder version unknown` banner.
