@@ -58,7 +58,35 @@
 
   # Default video parameters
   audio_codec='libfdk_aac'
-  video_codec='libx264'
+  video_codec='libx265'
+
+  # NVENC preset. This is NOT x264's -preset scale, and the two must not be
+  # mixed: handing "fast"/"medium"/"slow" to NVENC selects its LEGACY preset
+  # table, where "fast" means "hp 1 pass" -- the worst quality-per-bit setting it
+  # has. That is what this script did for every GPU encode until 2026-09-11.
+  # Measured on the 'series' profile (cq 23, pinned at the maxrate ceiling, so
+  # both runs spent the same bits): legacy "fast" scored SSIM 0.98754, p6 scored
+  # 0.99080 -- same bitrate, materially better picture. p5/p6/p7 are
+  # indistinguishable for h264_nvenc on this GPU (p7 came out byte-identical to
+  # p6), and p6 still runs ~11x realtime, so there is nothing to buy by going
+  # faster. $vPreset below stays on x264's scale for the --no-gpu path.
+  nvenc_preset='p6'
+
+  # Constant-quality levels. NVENC's CQ scale and x265's CRF scale are NOT the
+  # same scale, so these are calibrated separately -- a single shared number
+  # happened to work while both encoders were H.264 and does not survive the move
+  # to HEVC. $target_QF still sizes the maxrate/bufsize ceiling below, which is
+  # what keeps per-episode worst-case size predictable; it no longer pretends to
+  # set an average bitrate.
+  #
+  # Measured on the 'series' profile against the H.264 output this script
+  # produced before the HEVC switch (GPU 2476 kb/s @ SSIM 0.98948,
+  # CPU 1673 kb/s @ 0.99006):
+  #   hevc_nvenc cq 26 -> 2168 kb/s @ 0.99110   smaller AND better
+  #   libx265    crf 23 -> 1472 kb/s @ 0.99029   smaller AND better
+  # Raise nvenc_cq to 28 for ~26% smaller files at exactly the old quality.
+  nvenc_cq='26'
+  cpu_crf='23'
   hq='false'
   lq='false'
   outBase="$videoDir"
@@ -352,11 +380,11 @@ EOM
 
   hwaccel_args=''
   if [[ $GPU_AVAILABLE == true ]]; then
-    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
-      echo -e "${C3}WARNING: NVIDIA GPU detected but h264_nvenc not available, falling back to software encoding${C0}"
+    if ! $ffmpeg_bin -encoders 2>/dev/null | grep -q 'hevc_nvenc'; then
+      echo -e "${C3}WARNING: NVIDIA GPU detected but hevc_nvenc not available, falling back to software encoding${C0}"
       GPU_AVAILABLE=false
     else
-      video_codec='h264_nvenc'
+      video_codec='hevc_nvenc'
       # Decode on NVDEC in addition to encoding on NVENC. Decoded frames are
       # downloaded to system memory, so the CPU filter chain (scale/fps/format)
       # is unaffected. ffmpeg falls back to software decode per-stream if the
@@ -648,9 +676,15 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
     if [[ -e $inDir/${baseName[$l]}.png ]]; then
       vFilter+=",removelogo=\"$inDir/${baseName[$l]}.png\""
     fi
-    # Force 8-bit output. h264_nvenc cannot encode 10-bit (e.g. UHD BluRay
-    # HEVC Main 10) sources and aborts before the first frame otherwise.
-    vFilter+=",format=yuv420p"
+    # 10-bit output. The old 8-bit clamp was here because h264_nvenc cannot encode
+    # 10-bit and aborted before the first frame; HEVC has no such limit, and
+    # 10-bit measured smaller AND better on both encoders (hevc_nvenc cq26:
+    # 2168 kb/s @ SSIM 0.99110 vs 8-bit 2178 @ 0.99002; libx265 crf23: 1472 @
+    # 0.99029 vs 8-bit 1487 @ 0.98916). Confirmed 2026-09-11 from the Plex server
+    # log that HEVC Main 10 direct-plays on this setup's PC, phone and Samsung TV
+    # clients -- only AV1 was transcoded. The --no-gpu path needs a multilib x265
+    # or this silently falls back to 8-bit.
+    vFilter+=",format=yuv420p10le"
     traceIt $LINENO buildVideoFilter " info " "vFilter: $vFilter"
   }
 
@@ -663,24 +697,47 @@ declare vOpts vFilter aOpts aFilter sOpts outFile metaFile hwaccel_args
     local _vSize _hSize
     _vSize=$(awk "BEGIN {printf \"%.0f\", $vHeight*$scale}")
     _hSize=$(awk "BEGIN {printf \"%.0f\", $vWidth*$scale}")
+    # NOTE: this is a rate CEILING, not a target. Both encoders run in constant
+    # quality mode below, so $target_QF sets how many bits an episode is allowed
+    # at most, and the encoder spends less when the content is easy.
     target_vBitrate=$(awk "BEGIN {printf \"%.0f\", ($target_QF*$_hSize*$_vSize*$FPS)/1000}")
-    traceIt $LINENO buildVideoOpts " info " "target_vBitrate=$target_vBitrate"
+    traceIt $LINENO buildVideoOpts " info " "rate ceiling target_vBitrate=$target_vBitrate"
 
-    vOpts+="-b:v ${target_vBitrate}k "
+    local _maxrate=$((target_vBitrate + target_vBitrate/2))
+    local _bufsize=$((target_vBitrate * 2))
 
     if [[ $video_codec == *"nvenc"* ]]; then
       # NVENC encoder options
-      vOpts+="-preset $vPreset "
+      vOpts+="-preset $nvenc_preset "
       vOpts+="-rc vbr "
-      vOpts+="-cq 23 "
-      vOpts+="-bufsize $((target_vBitrate * 2))k "
-      vOpts+="-maxrate $((target_vBitrate + target_vBitrate/2))k "
+      vOpts+="-cq $nvenc_cq "
+      # Explicitly zero the average bitrate. NVENC DISCARDS -b:v the moment -cq
+      # is set and honours only -maxrate, so the "-b:v ${target_vBitrate}k" this
+      # script used to emit here was dead: verified that -cq 23 -b:v 4000k and
+      # -cq 23 -b:v 0 produce byte-identical output.
+      vOpts+="-b:v 0 "
+      vOpts+="-bufsize ${_bufsize}k "
+      vOpts+="-maxrate ${_maxrate}k "
       vOpts+="-multipass 2"
     else
-      # CPU encoder options
+      # CPU encoder options. Previously pure ABR (-b:v), which made --no-gpu
+      # behave quite differently from the GPU path; now constant-quality with the
+      # same ceiling so the two agree.
+      vOpts+="-crf $cpu_crf "
+      vOpts+="-maxrate ${_maxrate}k "
+      vOpts+="-bufsize ${_bufsize}k "
       vOpts+="-preset $vPreset "
-      vOpts+="-tune $vTune"
+      # -tune is x264's vocabulary. x265 rejects "film" outright ("Error setting
+      # preset/tune (null)/film") and aborts the encode, so only pass it to x264.
+      [[ $video_codec == 'libx264' ]] && vOpts+="-tune $vTune"
     fi
+
+    # MP4 can label HEVC as either hvc1 or hev1, and ffmpeg defaults to hev1.
+    # Apple platforms (iOS, macOS/Safari, Apple TV, QuickTime) decode ONLY hvc1
+    # and will refuse or transcode hev1. This is a container tag, not a stream
+    # change -- remuxing hev1 to hvc1 produces a byte-identical payload -- so
+    # there is no cost to always setting it. Everything else accepts hvc1 too.
+    [[ $video_codec == *hevc* || $video_codec == 'libx265' ]] && vOpts+=" -tag:v hvc1"
     traceIt $LINENO buildVideoOpts " info " "vOpts: $vOpts"
   }
 
